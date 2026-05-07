@@ -2,64 +2,38 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Save, Loader2 } from "lucide-react";
+import { ArrowLeft, Save, Loader2, Check } from "lucide-react";
 import { saveDocumentationAction } from "../actions";
-import dynamic from "next/dynamic";
-import TiptapEditor from "./tiptap-editor";
-
-// Dynamically import Excalidraw to avoid SSR issues
-const ExcalidrawWrapper = dynamic(() => import("./excalidraw-wrapper"), {
-  ssr: false,
-  loading: () => (
-    <div className="flex-1 flex items-center justify-center bg-secondary min-h-[300px]">
-      <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
-    </div>
-  ),
-});
+import NotionEditor from "./notion-editor";
 
 interface TaskEditorProps {
   taskId: string;
   taskName: string;
   moduleName: string;
-  initialTextContent: object | null;
-  initialDrawingContent: object | null;
+  initialContent: object | null;
 }
 
 export default function TaskEditor({
   taskId,
   taskName,
   moduleName,
-  initialTextContent,
-  initialDrawingContent,
+  initialContent,
 }: TaskEditorProps) {
   const router = useRouter();
 
   // Refs to track latest content without triggering re-renders
-  const textContentRef = useRef<object>(initialTextContent || {});
-  const drawingContentRef = useRef<object>(initialDrawingContent || {});
+  const contentRef = useRef<object>(initialContent || {});
 
-  const [textContent, setTextContent] = useState<object>(
-    initialTextContent || {}
-  );
-  const [drawingContent, setDrawingContent] = useState<object>(
-    initialDrawingContent || {}
-  );
+  const [content, setContent] = useState<object>(initialContent || {});
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  const [showSavedToast, setShowSavedToast] = useState(false);
 
-  // Handle text content change
-  const handleTextChange = useCallback((content: object) => {
-    setTextContent(content);
-    textContentRef.current = content;
-    setHasChanges(true);
-  }, []);
-
-  // Handle drawing content change
-  const handleDrawingChange = useCallback((elements: object, appState: object) => {
-    const newDrawingContent = { elements, appState };
-    setDrawingContent(newDrawingContent);
-    drawingContentRef.current = newDrawingContent;
+  // Handle content change
+  const handleContentChange = useCallback((newContent: object) => {
+    setContent(newContent);
+    contentRef.current = newContent;
     setHasChanges(true);
   }, []);
 
@@ -71,13 +45,15 @@ export default function TaskEditor({
     try {
       const result = await saveDocumentationAction(
         taskId,
-        textContentRef.current,
-        drawingContentRef.current
+        contentRef.current,
+        null // No drawing content
       );
 
       if (!result.error) {
         setLastSaved(new Date());
         setHasChanges(false);
+        setShowSavedToast(true);
+        setTimeout(() => setShowSavedToast(false), 2000);
       } else {
         console.error("Save error:", result.error);
       }
@@ -91,11 +67,7 @@ export default function TaskEditor({
   // Auto-save every 30 seconds if there are changes
   useEffect(() => {
     if (!hasChanges || isSaving) return;
-
-    const timer = setTimeout(() => {
-      handleSave();
-    }, 30000);
-
+    const timer = setTimeout(() => { handleSave(); }, 30000);
     return () => clearTimeout(timer);
   }, [hasChanges, isSaving, handleSave]);
 
@@ -124,91 +96,112 @@ export default function TaskEditor({
   }, [hasChanges, isSaving]);
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <header className="brutal-border-3 border-t-0 border-l-0 border-r-0 bg-card p-4 flex items-center justify-between sticky top-0 z-50">
-        <div className="flex items-center gap-4">
+    <div className="min-h-screen bg-[#ffffff] flex flex-col">
+      {/* Header - Minimal Notion-style */}
+      <header className="border-b border-gray-200 bg-white/80 backdrop-blur-sm p-3 flex items-center justify-between sticky top-0 z-50">
+        <div className="flex items-center gap-3">
           <button
             onClick={() => router.push("/documentation")}
-            className="p-2 brutal-border bg-card hover:bg-secondary transition-colors"
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-900"
             aria-label="Back to documentation"
           >
-            <ArrowLeft className="w-5 h-5" />
+            <ArrowLeft className="w-4 h-4" />
           </button>
-          <div>
-            <p className="text-xs font-mono text-muted-foreground uppercase">
-              {moduleName}
-            </p>
-            <h1 className="text-xl font-black">{taskName}</h1>
+          <div className="flex flex-col">
+            <span className="text-xs text-gray-500 font-medium">{moduleName}</span>
+            <h1 className="text-sm font-semibold text-gray-900">{taskName}</h1>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          {lastSaved && (
-            <span className="text-xs font-mono text-muted-foreground hidden sm:inline">
-              Saved {lastSaved.toLocaleTimeString()}
-            </span>
-          )}
+        <div className="flex items-center gap-3">
+          {/* Saved indicator */}
+          <div className="flex items-center gap-2">
+            {showSavedToast && (
+              <span className="flex items-center gap-1 text-xs text-green-600 font-medium animate-fade-in">
+                <Check className="w-3 h-3" />
+                Saved
+              </span>
+            )}
+            {lastSaved && !showSavedToast && (
+              <span className="text-xs text-gray-400">
+                {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+          </div>
+
+          {/* Unsaved changes indicator */}
           {hasChanges && !isSaving && (
-            <span className="text-xs font-mono text-accent-foreground bg-accent px-2 py-1 brutal-border">
-              ● Unsaved
+            <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              Editing
             </span>
           )}
+
+          {/* Save button */}
           <button
             onClick={handleSave}
-            disabled={isSaving}
-            className="px-4 py-2 brutal-border bg-primary text-primary-foreground font-bold flex items-center gap-2 hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-all brutal-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={isSaving || !hasChanges}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${isSaving || !hasChanges
+                ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                : "bg-black text-white hover:bg-gray-800 active:scale-[0.98]"
+              }`}
           >
             {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <Save className="w-4 h-4" />
             )}
-            <span className="hidden sm:inline">{isSaving ? "Saving..." : "Save"}</span>
+            <span className="hidden sm:inline">{isSaving ? "Saving" : "Save"}</span>
           </button>
         </div>
       </header>
 
-      {/* Unified Editor Canvas - Notion-style flow */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="bg-[#f8f9fa] brutal-border-3 border-t-0 border-l-0 border-r-0 p-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="font-bold uppercase text-sm">Documentation Editor</span>
-            <span className="text-xs font-mono text-foreground/70 hidden sm:inline">
-              (Write text or draw diagrams)
-            </span>
-          </div>
-          <div className="text-xs font-mono text-muted-foreground">
-            Ctrl/Cmd + S to save
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-auto p-4 lg:p-6">
-          <div className="max-w-5xl mx-auto space-y-6">
-            {/* Tiptap Rich Text Editor */}
-            <div className="brutal-border bg-card rounded-sm overflow-hidden">
-              <TiptapEditor
-                initialContent={initialTextContent}
-                onChange={handleTextChange}
-              />
-            </div>
-
-            {/* Excalidraw Drawing Canvas */}
-            <div className="brutal-border bg-card rounded-sm overflow-hidden">
-              <div className="bg-[#ffd60a]/20 brutal-border-3 border-t-0 border-l-0 border-r-0 p-2 flex items-center gap-2">
-                <span className="font-bold uppercase text-sm">Drawing Canvas</span>
-                <span className="text-xs font-mono text-foreground/70">
-                  (Excalidraw)
-                </span>
-              </div>
-              <ExcalidrawWrapper
-                initialData={initialDrawingContent}
-                onChange={handleDrawingChange}
-              />
+      {/* Notion-style Editor */}
+      <div className="flex-1 overflow-auto">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+          {/* Page title area */}
+          <div className="mb-6 pb-4 border-b border-gray-100">
+            <input
+              type="text"
+              value={taskName}
+              readOnly
+              className="w-full text-3xl sm:text-4xl font-bold text-gray-900 placeholder-gray-300 bg-transparent border-none outline-none focus:ring-0 p-0"
+              placeholder="Untitled"
+            />
+            <div className="mt-2 flex items-center gap-2 text-sm text-gray-500">
+              <span>{moduleName}</span>
+              <span>•</span>
+              <span>Task #{taskId.slice(-4)}</span>
             </div>
           </div>
+
+          {/* Main Editor */}
+          <NotionEditor
+            initialContent={initialContent}
+            onChange={handleContentChange}
+            placeholder="Type '/' for commands, or start writing..."
+          />
         </div>
       </div>
+
+      {/* Bottom status bar */}
+      <footer className="border-t border-gray-100 bg-white/80 backdrop-blur-sm px-4 py-2 text-xs text-gray-400 flex items-center justify-between">
+        <span>{hasChanges ? '● Unsaved changes' : '✓ All changes saved'}</span>
+        <span className="hidden sm:inline">Press <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono">S</kbd> to save</span>
+      </footer>
+
+      <style jsx global>{`
+        @keyframes fade-in {
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+          animation: fade-in 0.2s ease-out;
+        }
+        kbd {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+      `}</style>
     </div>
   );
 }

@@ -40,10 +40,10 @@ export default async function TaskEditorPage({ params }: PageProps) {
     notFound();
   }
 
-  // Fetch existing documentation
+  // Fetch existing documentation (now only text_content)
   const { data: doc, error: docError } = await supabase
     .from("task_documentation")
-    .select("text_content, drawing_content")
+    .select("text_content")
     .eq("task_id", taskId)
     .maybeSingle();
 
@@ -58,8 +58,7 @@ export default async function TaskEditorPage({ params }: PageProps) {
       taskId={task.id}
       taskName={task.name}
       moduleName={moduleName}
-      initialTextContent={doc?.text_content || null}
-      initialDrawingContent={doc?.drawing_content || null}
+      initialContent={doc?.text_content || null}
     />
   );
 }

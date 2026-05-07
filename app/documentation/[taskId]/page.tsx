@@ -1,4 +1,4 @@
-// app/documentation/tasks/[taskId]/page.tsx
+// app/documentation/[taskId]/page.tsx
 import { createClient } from "@/lib/supabase/server";
 import { redirect, notFound } from "next/navigation";
 import { getSession } from "@/lib/auth";
@@ -18,7 +18,7 @@ export default async function TaskEditorPage({ params }: PageProps) {
 
   const supabase = await createClient();
 
-  const {  task, error: taskError } = await supabase
+  const { data: task, error: taskError } = await supabase
     .from("tasks")
     .select(`id, name, task_order, is_completed, modules (id, name)`)
     .eq("id", taskId)
@@ -29,8 +29,7 @@ export default async function TaskEditorPage({ params }: PageProps) {
     notFound();
   }
 
-  // Fetch only text_content now (no drawing_content)
-  const {  doc } = await supabase
+  const { data: doc } = await supabase
     .from("task_documentation")
     .select("text_content")
     .eq("task_id", taskId)

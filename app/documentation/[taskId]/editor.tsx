@@ -7,10 +7,11 @@ import { saveDocumentationAction } from "../actions";
 import dynamic from "next/dynamic";
 import TiptapEditor from "./tiptap-editor";
 
+// Dynamically import Excalidraw to avoid SSR issues
 const ExcalidrawWrapper = dynamic(() => import("./excalidraw-wrapper"), {
   ssr: false,
   loading: () => (
-    <div className="flex-1 flex items-center justify-center bg-secondary">
+    <div className="flex-1 flex items-center justify-center bg-secondary min-h-[300px]">
       <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
     </div>
   ),
@@ -32,11 +33,11 @@ export default function TaskEditor({
   initialDrawingContent,
 }: TaskEditorProps) {
   const router = useRouter();
-  
-  // Use refs to track content without triggering re-renders for effects
+
+  // Refs to track latest content without triggering re-renders
   const textContentRef = useRef<object>(initialTextContent || {});
   const drawingContentRef = useRef<object>(initialDrawingContent || {});
-  
+
   const [textContent, setTextContent] = useState<object>(
     initialTextContent || {}
   );
@@ -50,7 +51,7 @@ export default function TaskEditor({
   // Handle text content change
   const handleTextChange = useCallback((content: object) => {
     setTextContent(content);
-    textContentRef.current = content; // Update ref without re-render trigger
+    textContentRef.current = content;
     setHasChanges(true);
   }, []);
 
@@ -62,15 +63,15 @@ export default function TaskEditor({
     setHasChanges(true);
   }, []);
 
-  // Save documentation - memoized with stable deps
+  // Save documentation - memoized with stable dependencies
   const handleSave = useCallback(async () => {
-    if (isSaving) return; // Prevent duplicate saves
-    
+    if (isSaving) return;
+
     setIsSaving(true);
     try {
       const result = await saveDocumentationAction(
         taskId,
-        textContentRef.current, // Use ref for latest value without re-render
+        textContentRef.current,
         drawingContentRef.current
       );
 
@@ -85,7 +86,7 @@ export default function TaskEditor({
     } finally {
       setIsSaving(false);
     }
-  }, [taskId, isSaving]); // ← Only stable dependencies
+  }, [taskId, isSaving]);
 
   // Auto-save every 30 seconds if there are changes
   useEffect(() => {
@@ -96,9 +97,9 @@ export default function TaskEditor({
     }, 30000);
 
     return () => clearTimeout(timer);
-  }, [hasChanges, isSaving, handleSave]); // ← Stable deps only [[44]]
+  }, [hasChanges, isSaving, handleSave]);
 
-  // Keyboard shortcut for save
+  // Keyboard shortcut for save (Ctrl/Cmd + S)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
@@ -110,7 +111,7 @@ export default function TaskEditor({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleSave]);
 
-  // Before unload warning for unsaved changes
+  // Warn before leaving with unsaved changes
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (hasChanges && !isSaving) {
@@ -125,11 +126,12 @@ export default function TaskEditor({
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
-      <header className="brutal-border-3 border-t-0 border-l-0 border-r-0 bg-card p-4 flex items-center justify-between">
+      <header className="brutal-border-3 border-t-0 border-l-0 border-r-0 bg-card p-4 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-4">
           <button
             onClick={() => router.push("/documentation")}
             className="p-2 brutal-border bg-card hover:bg-secondary transition-colors"
+            aria-label="Back to documentation"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
@@ -143,56 +145,62 @@ export default function TaskEditor({
 
         <div className="flex items-center gap-4">
           {lastSaved && (
-            <span className="text-xs font-mono text-muted-foreground">
+            <span className="text-xs font-mono text-muted-foreground hidden sm:inline">
               Saved {lastSaved.toLocaleTimeString()}
             </span>
           )}
           {hasChanges && !isSaving && (
             <span className="text-xs font-mono text-accent-foreground bg-accent px-2 py-1 brutal-border">
-              ● Unsaved changes
+              ● Unsaved
             </span>
           )}
           <button
             onClick={handleSave}
             disabled={isSaving}
-            className="px-4 py-2 brutal-border bg-primary text-primary-foreground font-bold flex items-center gap-2 hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-all brutal-shadow disabled:opacity-50"
+            className="px-4 py-2 brutal-border bg-primary text-primary-foreground font-bold flex items-center gap-2 hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-all brutal-shadow disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <Save className="w-4 h-4" />
             )}
-            {isSaving ? "Saving..." : "Save"}
+            <span className="hidden sm:inline">{isSaving ? "Saving..." : "Save"}</span>
           </button>
         </div>
       </header>
 
-      {/* Unified Editor Canvas - Notion-like flow */}
+      {/* Unified Editor Canvas - Notion-style flow */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="bg-[#f8f9fa] brutal-border-3 border-t-0 border-l-0 border-r-0 p-2 flex items-center justify-between">
+        <div className="bg-[#f8f9fa] brutal-border-3 border-t-0 border-l-0 border-r-0 p-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="font-bold uppercase text-sm">Documentation Editor</span>
-            <span className="text-xs font-mono text-foreground/70">
-              (Type text or embed drawings)
+            <span className="text-xs font-mono text-foreground/70 hidden sm:inline">
+              (Write text or draw diagrams)
             </span>
           </div>
           <div className="text-xs font-mono text-muted-foreground">
             Ctrl/Cmd + S to save
           </div>
         </div>
-        
-        <div className="flex-1 overflow-auto p-4">
-          <div className="max-w-4xl mx-auto space-y-4">
-            {/* Tiptap Editor - Full width */}
+
+        <div className="flex-1 overflow-auto p-4 lg:p-6">
+          <div className="max-w-5xl mx-auto space-y-6">
+            {/* Tiptap Rich Text Editor */}
             <div className="brutal-border bg-card rounded-sm overflow-hidden">
               <TiptapEditor
                 initialContent={initialTextContent}
                 onChange={handleTextChange}
               />
             </div>
-            
-            {/* Excalidraw Canvas - Full width below text */}
-            <div className="brutal-border bg-card rounded-sm overflow-hidden min-h-[500px]">
+
+            {/* Excalidraw Drawing Canvas */}
+            <div className="brutal-border bg-card rounded-sm overflow-hidden">
+              <div className="bg-[#ffd60a]/20 brutal-border-3 border-t-0 border-l-0 border-r-0 p-2 flex items-center gap-2">
+                <span className="font-bold uppercase text-sm">Drawing Canvas</span>
+                <span className="text-xs font-mono text-foreground/70">
+                  (Excalidraw)
+                </span>
+              </div>
               <ExcalidrawWrapper
                 initialData={initialDrawingContent}
                 onChange={handleDrawingChange}

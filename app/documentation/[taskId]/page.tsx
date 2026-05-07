@@ -36,15 +36,20 @@ export default async function TaskEditorPage({ params }: PageProps) {
     .single();
 
   if (taskError || !task) {
+    console.error("Task fetch error:", taskError);
     notFound();
   }
 
   // Fetch existing documentation
-  const { data: doc } = await supabase
+  const { data: doc, error: docError } = await supabase
     .from("task_documentation")
     .select("text_content, drawing_content")
     .eq("task_id", taskId)
-    .single();
+    .maybeSingle();
+
+  if (docError) {
+    console.error("Documentation fetch error:", docError);
+  }
 
   const moduleName = (task.modules as { name: string } | null)?.name || "Unknown Module";
 

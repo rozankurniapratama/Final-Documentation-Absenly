@@ -1,6 +1,7 @@
 "use client";
 
 import { Excalidraw } from "@excalidraw/excalidraw";
+import "@excalidraw/excalidraw/index.css";
 import { useCallback, useState, useRef, useEffect } from "react";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import type { AppState, ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";

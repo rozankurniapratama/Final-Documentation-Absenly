@@ -1,3 +1,4 @@
+// app/documentation/tasks/[taskId]/page.tsx
 import { createClient } from "@/lib/supabase/server";
 import { redirect, notFound } from "next/navigation";
 import { getSession } from "@/lib/auth";
@@ -17,21 +18,9 @@ export default async function TaskEditorPage({ params }: PageProps) {
 
   const supabase = await createClient();
 
-  // Fetch task with its module
-  const { data: task, error: taskError } = await supabase
+  const {  task, error: taskError } = await supabase
     .from("tasks")
-    .select(
-      `
-      id,
-      name,
-      task_order,
-      is_completed,
-      modules (
-        id,
-        name
-      )
-    `
-    )
+    .select(`id, name, task_order, is_completed, modules (id, name)`)
     .eq("id", taskId)
     .single();
 
@@ -40,16 +29,12 @@ export default async function TaskEditorPage({ params }: PageProps) {
     notFound();
   }
 
-  // Fetch existing documentation (now only text_content)
-  const { data: doc, error: docError } = await supabase
+  // Fetch only text_content now (no drawing_content)
+  const {  doc } = await supabase
     .from("task_documentation")
     .select("text_content")
     .eq("task_id", taskId)
     .maybeSingle();
-
-  if (docError) {
-    console.error("Documentation fetch error:", docError);
-  }
 
   const moduleName = (task.modules as { name: string } | null)?.name || "Unknown Module";
 

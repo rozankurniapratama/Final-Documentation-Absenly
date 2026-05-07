@@ -1,13 +1,12 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { saveDocumentationAction } from "../actions";
 import dynamic from "next/dynamic";
 import TiptapEditor from "./tiptap-editor";
 
-// Dynamically import Excalidraw to avoid SSR issues
 const ExcalidrawWrapper = dynamic(() => import("./excalidraw-wrapper"), {
   ssr: false,
   loading: () => (
@@ -33,6 +32,11 @@ export default function TaskEditor({
   initialDrawingContent,
 }: TaskEditorProps) {
   const router = useRouter();
+  
+  // Use refs to track content without triggering re-renders for effects
+  const textContentRef = useRef<object>(initialTextContent || {});
+  const drawingContentRef = useRef<object>(initialDrawingContent || {});
+  
   const [textContent, setTextContent] = useState<object>(
     initialTextContent || {}
   );
@@ -46,43 +50,53 @@ export default function TaskEditor({
   // Handle text content change
   const handleTextChange = useCallback((content: object) => {
     setTextContent(content);
+    textContentRef.current = content; // Update ref without re-render trigger
     setHasChanges(true);
   }, []);
 
   // Handle drawing content change
   const handleDrawingChange = useCallback((elements: object, appState: object) => {
-    setDrawingContent({ elements, appState });
+    const newDrawingContent = { elements, appState };
+    setDrawingContent(newDrawingContent);
+    drawingContentRef.current = newDrawingContent;
     setHasChanges(true);
   }, []);
 
-  // Save documentation
-  const handleSave = async () => {
+  // Save documentation - memoized with stable deps
+  const handleSave = useCallback(async () => {
+    if (isSaving) return; // Prevent duplicate saves
+    
     setIsSaving(true);
-    const result = await saveDocumentationAction(
-      taskId,
-      textContent,
-      drawingContent
-    );
+    try {
+      const result = await saveDocumentationAction(
+        taskId,
+        textContentRef.current, // Use ref for latest value without re-render
+        drawingContentRef.current
+      );
 
-    if (!result.error) {
-      setLastSaved(new Date());
-      setHasChanges(false);
-    } else {
-      console.error("Save error:", result.error);
+      if (!result.error) {
+        setLastSaved(new Date());
+        setHasChanges(false);
+      } else {
+        console.error("Save error:", result.error);
+      }
+    } catch (error) {
+      console.error("Save exception:", error);
+    } finally {
+      setIsSaving(false);
     }
-    setIsSaving(false);
-  };
+  }, [taskId, isSaving]); // ← Only stable dependencies
 
   // Auto-save every 30 seconds if there are changes
   useEffect(() => {
-    if (!hasChanges) return;
+    if (!hasChanges || isSaving) return;
 
     const timer = setTimeout(() => {
       handleSave();
     }, 30000);
 
     return () => clearTimeout(timer);
-  }, [hasChanges, textContent, drawingContent]);
+  }, [hasChanges, isSaving, handleSave]); // ← Stable deps only [[44]]
 
   // Keyboard shortcut for save
   useEffect(() => {
@@ -92,10 +106,21 @@ export default function TaskEditor({
         handleSave();
       }
     };
-
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [textContent, drawingContent]);
+  }, [handleSave]);
+
+  // Before unload warning for unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasChanges && !isSaving) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasChanges, isSaving]);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -124,7 +149,7 @@ export default function TaskEditor({
           )}
           {hasChanges && !isSaving && (
             <span className="text-xs font-mono text-accent-foreground bg-accent px-2 py-1 brutal-border">
-              Unsaved changes
+              ● Unsaved changes
             </span>
           )}
           <button
@@ -142,36 +167,38 @@ export default function TaskEditor({
         </div>
       </header>
 
-      {/* Main content - split view */}
-      <div className="flex-1 flex flex-col lg:flex-row">
-        {/* Text Editor (Tiptap) */}
-        <div className="flex-1 flex flex-col border-b-2 lg:border-b-0 lg:border-r-2 border-border">
-          <div className="bg-[#a8d5ff] brutal-border-3 border-t-0 border-l-0 border-r-0 p-2 flex items-center gap-2">
-            <span className="font-bold uppercase text-sm">Rich Text Editor</span>
+      {/* Unified Editor Canvas - Notion-like flow */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="bg-[#f8f9fa] brutal-border-3 border-t-0 border-l-0 border-r-0 p-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="font-bold uppercase text-sm">Documentation Editor</span>
             <span className="text-xs font-mono text-foreground/70">
-              (Notion-like)
+              (Type text or embed drawings)
             </span>
           </div>
-          <div className="flex-1 overflow-auto">
-            <TiptapEditor
-              initialContent={initialTextContent}
-              onChange={handleTextChange}
-            />
+          <div className="text-xs font-mono text-muted-foreground">
+            Ctrl/Cmd + S to save
           </div>
         </div>
-
-        {/* Drawing Canvas (Excalidraw) */}
-        <div className="flex-1 flex flex-col min-h-[400px] lg:min-h-0">
-          <div className="bg-[#ffd60a] brutal-border-3 border-t-0 border-l-0 border-r-0 p-2 flex items-center gap-2">
-            <span className="font-bold uppercase text-sm">Drawing Canvas</span>
-            <span className="text-xs font-mono text-foreground/70">
-              (Excalidraw)
-            </span>
+        
+        <div className="flex-1 overflow-auto p-4">
+          <div className="max-w-4xl mx-auto space-y-4">
+            {/* Tiptap Editor - Full width */}
+            <div className="brutal-border bg-card rounded-sm overflow-hidden">
+              <TiptapEditor
+                initialContent={initialTextContent}
+                onChange={handleTextChange}
+              />
+            </div>
+            
+            {/* Excalidraw Canvas - Full width below text */}
+            <div className="brutal-border bg-card rounded-sm overflow-hidden min-h-[500px]">
+              <ExcalidrawWrapper
+                initialData={initialDrawingContent}
+                onChange={handleDrawingChange}
+              />
+            </div>
           </div>
-          <ExcalidrawWrapper
-            initialData={initialDrawingContent}
-            onChange={handleDrawingChange}
-          />
         </div>
       </div>
     </div>

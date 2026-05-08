@@ -12,8 +12,17 @@ import {
   Code,
   BookOpen,
   LogOut,
+  Pencil,
+  Trash2,
+  X,
+  Check,
 } from "lucide-react";
-import { toggleTaskAction, logoutAction } from "./actions";
+import {
+  toggleTaskAction,
+  logoutAction,
+  updateTaskAction,
+  deleteTaskAction,
+} from "./actions";
 
 interface Task {
   id: string;
@@ -69,6 +78,11 @@ export default function DocumentationDashboard({
   const [filter, setFilter] = useState<FilterOption>("all");
   const [updatingTasks, setUpdatingTasks] = useState<Set<string>>(new Set());
 
+  // Edit/Delete state
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+
   // Toggle module expansion
   const toggleModule = (moduleId: string) => {
     setExpandedModules((prev) => {
@@ -92,18 +106,17 @@ export default function DocumentationDashboard({
     e.stopPropagation();
     setUpdatingTasks((prev) => new Set(prev).add(taskId));
 
-    // Optimistic update
     setModules((prev) =>
       prev.map((module) =>
         module.id === moduleId
           ? {
-              ...module,
-              tasks: module.tasks.map((task) =>
-                task.id === taskId
-                  ? { ...task, is_completed: !currentState }
-                  : task
-              ),
-            }
+            ...module,
+            tasks: module.tasks.map((task) =>
+              task.id === taskId
+                ? { ...task, is_completed: !currentState }
+                : task
+            ),
+          }
           : module
       )
     );
@@ -111,18 +124,17 @@ export default function DocumentationDashboard({
     const result = await toggleTaskAction(taskId, !currentState);
 
     if (result.error) {
-      // Revert on error
       setModules((prev) =>
         prev.map((module) =>
           module.id === moduleId
             ? {
-                ...module,
-                tasks: module.tasks.map((task) =>
-                  task.id === taskId
-                    ? { ...task, is_completed: currentState }
-                    : task
-                ),
-              }
+              ...module,
+              tasks: module.tasks.map((task) =>
+                task.id === taskId
+                  ? { ...task, is_completed: currentState }
+                  : task
+              ),
+            }
             : module
         )
       );
@@ -153,6 +165,118 @@ export default function DocumentationDashboard({
   const handleLogout = async () => {
     await logoutAction();
     router.push("/login");
+  };
+
+  // Start editing task name
+  const handleEditStart = (task: Task, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingTaskId(task.id);
+    setEditValue(task.name);
+  };
+
+  // Save edited task name
+  const handleEditSave = async (taskId: string, moduleId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!editValue.trim()) return;
+
+    setUpdatingTasks((prev) => new Set(prev).add(taskId));
+
+    // Optimistic update
+    setModules((prev) =>
+      prev.map((module) =>
+        module.id === moduleId
+          ? {
+            ...module,
+            tasks: module.tasks.map((task) =>
+              task.id === taskId ? { ...task, name: editValue.trim() } : task
+            ),
+          }
+          : module
+      )
+    );
+
+    const result = await updateTaskAction(taskId, { name: editValue.trim() });
+
+    if (result.error) {
+      // Revert on error
+      setModules((prev) =>
+        prev.map((module) =>
+          module.id === moduleId
+            ? {
+              ...module,
+              tasks: module.tasks.map((task) =>
+                task.id === taskId ? { ...task, name: editValue } : task
+              ),
+            }
+            : module
+        )
+      );
+      alert("Failed to update task: " + result.error);
+    }
+
+    setEditingTaskId(null);
+    setUpdatingTasks((prev) => {
+      const next = new Set(prev);
+      next.delete(taskId);
+      return next;
+    });
+  };
+
+  // Cancel editing
+  const handleEditCancel = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingTaskId(null);
+  };
+
+  // Handle key press in edit input
+  const handleEditKeyPress = (
+    e: React.KeyboardEvent,
+    taskId: string,
+    moduleId: string
+  ) => {
+    if (e.key === "Enter") {
+      handleEditSave(taskId, moduleId, e as unknown as React.MouseEvent);
+    } else if (e.key === "Escape") {
+      handleEditCancel(e as unknown as React.MouseEvent);
+    }
+  };
+
+  // Delete task
+  const handleDeleteTask = async (
+    e: React.MouseEvent,
+    moduleId: string,
+    taskId: string
+  ) => {
+    e.stopPropagation();
+
+    if (!confirm("Are you sure you want to delete this task?")) return;
+
+    setDeletingTaskId(taskId);
+    setUpdatingTasks((prev) => new Set(prev).add(taskId));
+
+    // Optimistic update: remove task from UI
+    setModules((prev) =>
+      prev.map((module) =>
+        module.id === moduleId
+          ? { ...module, tasks: module.tasks.filter((t) => t.id !== taskId) }
+          : module
+      )
+    );
+
+    const result = await deleteTaskAction(taskId);
+
+    if (result.error) {
+      // Revert on error - reload modules from server would be ideal, but for now:
+      alert("Failed to delete task: " + result.error);
+      router.refresh(); // Force refresh to get fresh data
+    }
+
+    setDeletingTaskId(null);
+    setUpdatingTasks((prev) => {
+      const next = new Set(prev);
+      next.delete(taskId);
+      return next;
+    });
   };
 
   // Filter and search modules
@@ -259,11 +383,10 @@ export default function DocumentationDashboard({
             <div
               className="h-full bg-[#4ade80] transition-all duration-300"
               style={{
-                width: `${
-                  stats.totalTasks > 0
+                width: `${stats.totalTasks > 0
                     ? (stats.completedTasks / stats.totalTasks) * 100
                     : 0
-                }%`,
+                  }%`,
               }}
             />
           </div>
@@ -289,11 +412,10 @@ export default function DocumentationDashboard({
               <button
                 key={option}
                 onClick={() => setFilter(option)}
-                className={`px-4 py-3 brutal-border font-bold uppercase text-sm transition-all ${
-                  filter === option
+                className={`px-4 py-3 brutal-border font-bold uppercase text-sm transition-all ${filter === option
                     ? "bg-primary text-primary-foreground brutal-shadow-sm"
                     : "bg-card hover:bg-accent"
-                }`}
+                  }`}
               >
                 {option}
               </button>
@@ -337,9 +459,8 @@ export default function DocumentationDashboard({
             return (
               <div
                 key={module.id}
-                className={`brutal-border brutal-shadow transition-all ${
-                  isComplete ? "bg-[#4ade80]/20" : "bg-card"
-                }`}
+                className={`brutal-border brutal-shadow transition-all ${isComplete ? "bg-[#4ade80]/20" : "bg-card"
+                  }`}
               >
                 {/* Module Header */}
                 <button
@@ -359,9 +480,8 @@ export default function DocumentationDashboard({
                   </div>
                   <div className="flex items-center gap-3">
                     <span
-                      className={`px-3 py-1 brutal-border text-sm font-bold ${
-                        isComplete ? "bg-[#4ade80]" : "bg-[#ffd60a]"
-                      }`}
+                      className={`px-3 py-1 brutal-border text-sm font-bold ${isComplete ? "bg-[#4ade80]" : "bg-[#ffd60a]"
+                        }`}
                     >
                       {moduleProgress}/{module.tasks.length}
                     </span>
@@ -372,85 +492,154 @@ export default function DocumentationDashboard({
                 {/* Tasks */}
                 {isExpanded && (
                   <div className="border-t-2 border-border">
-                    {(module.filteredTasks || module.tasks).map((task) => (
-                      <div
-                        key={task.id}
-                        onClick={() => openTaskEditor(task.id)}
-                        className={`p-4 border-b-2 border-border last:border-b-0 flex items-center gap-4 cursor-pointer transition-all ${
-                          task.is_completed
-                            ? "bg-[#4ade80]/10"
-                            : "hover:bg-secondary/50"
-                        }`}
-                      >
-                        {/* Custom Checkbox */}
-                        <button
-                          onClick={(e) =>
-                            handleToggleTask(
-                              e,
-                              module.id,
-                              task.id,
-                              task.is_completed
-                            )
-                          }
-                          disabled={updatingTasks.has(task.id)}
-                          className={`w-6 h-6 brutal-border flex-shrink-0 flex items-center justify-center transition-all ${
-                            task.is_completed
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-card hover:bg-accent"
-                          } ${
-                            updatingTasks.has(task.id)
-                              ? "opacity-50 cursor-not-allowed"
-                              : ""
-                          }`}
-                        >
-                          {task.is_completed && (
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={3}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M5 13l4 4L19 7"
-                              />
-                            </svg>
-                          )}
-                        </button>
+                    {(module.filteredTasks || module.tasks).map((task) => {
+                      const isEditing = editingTaskId === task.id;
+                      const isDeleting = deletingTaskId === task.id;
+                      const isUpdating = updatingTasks.has(task.id);
 
-                        {/* Task Badge */}
+                      return (
                         <div
-                          className={`px-2 py-1 brutal-border text-xs font-bold uppercase flex items-center gap-1 flex-shrink-0 ${getTaskColor(
-                            task.task_order
-                          )}`}
+                          key={task.id}
+                          onClick={() => !isEditing && openTaskEditor(task.id)}
+                          className={`p-4 border-b-2 border-border last:border-b-0 flex items-center gap-4 transition-all ${task.is_completed
+                              ? "bg-[#4ade80]/10"
+                              : "hover:bg-secondary/50"
+                            } ${isUpdating ? "opacity-60" : ""}`}
                         >
-                          {getTaskIcon(task.name)}
-                          <span>
-                            {task.task_order === 1
-                              ? "Tech"
-                              : task.task_order === 2
-                                ? "API"
-                                : "Guide"}
-                          </span>
+                          {/* Custom Checkbox */}
+                          <button
+                            onClick={(e) =>
+                              handleToggleTask(
+                                e,
+                                module.id,
+                                task.id,
+                                task.is_completed
+                              )
+                            }
+                            disabled={isUpdating}
+                            className={`w-6 h-6 brutal-border flex-shrink-0 flex items-center justify-center transition-all ${task.is_completed
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-card hover:bg-accent"
+                              } ${isUpdating ? "cursor-not-allowed" : ""}`}
+                          >
+                            {task.is_completed && (
+                              <svg
+                                className="w-4 h-4"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={3}
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M5 13l4 4L19 7"
+                                />
+                              </svg>
+                            )}
+                          </button>
+
+                          {/* Task Badge */}
+                          <div
+                            className={`px-2 py-1 brutal-border text-xs font-bold uppercase flex items-center gap-1 flex-shrink-0 ${getTaskColor(
+                              task.task_order
+                            )}`}
+                          >
+                            {getTaskIcon(task.name)}
+                            <span>
+                              {task.task_order === 1
+                                ? "Tech"
+                                : task.task_order === 2
+                                  ? "API"
+                                  : "Guide"}
+                            </span>
+                          </div>
+
+                          {/* Task Name - Editable */}
+                          <div className="flex-1 min-w-0">
+                            {isEditing ? (
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="text"
+                                  value={editValue}
+                                  onChange={(e) => setEditValue(e.target.value)}
+                                  onKeyDown={(e) =>
+                                    handleEditKeyPress(e, task.id, module.id)
+                                  }
+                                  onClick={(e) => e.stopPropagation()}
+                                  autoFocus
+                                  className="flex-1 px-2 py-1 brutal-border bg-background font-medium outline-none focus:ring-2 focus:ring-primary"
+                                />
+                                <button
+                                  onClick={(e) =>
+                                    handleEditSave(task.id, module.id, e)
+                                  }
+                                  className="p-1 hover:bg-[#4ade80] brutal-border transition-colors"
+                                  title="Save"
+                                >
+                                  <Check className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={handleEditCancel}
+                                  className="p-1 hover:bg-destructive brutal-border transition-colors"
+                                  title="Cancel"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                            ) : (
+                              <span
+                                className={`font-medium block truncate ${task.is_completed
+                                    ? "line-through opacity-60"
+                                    : ""
+                                  }`}
+                                title={task.name}
+                              >
+                                {task.name}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            {!isEditing && !isDeleting && (
+                              <>
+                                <button
+                                  onClick={(e) => handleEditStart(task, e)}
+                                  disabled={isUpdating}
+                                  className="p-2 hover:bg-[#a8d5ff] brutal-border transition-colors disabled:opacity-50"
+                                  title="Edit task name"
+                                >
+                                  <Pencil className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={(e) =>
+                                    handleDeleteTask(e, module.id, task.id)
+                                  }
+                                  disabled={isUpdating}
+                                  className="p-2 hover:bg-destructive brutal-border transition-colors disabled:opacity-50"
+                                  title="Delete task"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </>
+                            )}
+                            {isDeleting && (
+                              <span className="text-xs text-muted-foreground">
+                                Deleting...
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Open indicator */}
+                          {!isEditing && (
+                            <span className="text-xs font-mono text-muted-foreground uppercase hidden md:block">
+                              Click to edit
+                            </span>
+                          )}
                         </div>
-
-                        {/* Task Label */}
-                        <span
-                          className={`font-medium flex-1 ${
-                            task.is_completed ? "line-through opacity-60" : ""
-                          }`}
-                        >
-                          {task.name}
-                        </span>
-
-                        {/* Open indicator */}
-                        <span className="text-xs font-mono text-muted-foreground uppercase">
-                          Click to edit
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

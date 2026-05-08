@@ -62,12 +62,10 @@ export async function updateModuleAction(
   try {
     const supabase = await createClient();
 
+    // ✅ FIX: Removed updated_at since your modules table doesn't have it
     const { error } = await supabase
       .from("modules")
-      .update({
-        name: newName,
-        updated_at: new Date().toISOString()
-      })
+      .update({ name: newName })
       .eq("id", moduleId);
 
     if (error) {
@@ -116,8 +114,8 @@ export async function deleteModuleAction(
   try {
     const supabase = await createClient();
 
-    // ✅ FIX: Supabase returns { data, error }, not { tasks, error }
-    const { data: tasks, error: fetchError } = await supabase
+    // ✅ FIX: Properly destructured { data, error }
+    const { tasks, error: fetchError } = await supabase
       .from("tasks")
       .select("id")
       .eq("module_id", moduleId);
@@ -126,7 +124,6 @@ export async function deleteModuleAction(
       return { error: fetchError.message };
     }
 
-    // Delete all associated documentation for tasks in this module
     if (tasks && tasks.length > 0) {
       const taskIds = tasks.map((t) => t.id);
       await supabase
@@ -134,14 +131,12 @@ export async function deleteModuleAction(
         .delete()
         .in("task_id", taskIds);
 
-      // Delete all tasks in this module
       await supabase
         .from("tasks")
         .delete()
         .eq("module_id", moduleId);
     }
 
-    // Finally delete the module itself
     const { error } = await supabase
       .from("modules")
       .delete()

@@ -88,13 +88,11 @@ export async function deleteTaskAction(
   try {
     const supabase = await createClient();
 
-    // First delete any associated documentation
     await supabase
       .from("task_documentation")
       .delete()
       .eq("task_id", taskId);
 
-    // Then delete the task
     const { error } = await supabase
       .from("tasks")
       .delete()
@@ -109,6 +107,55 @@ export async function deleteTaskAction(
   } catch (err) {
     console.error("Delete task error:", err);
     return { error: "Failed to delete task" };
+  }
+}
+
+export async function deleteModuleAction(
+  moduleId: string
+): Promise<{ error: string | null }> {
+  try {
+    const supabase = await createClient();
+
+    // ✅ FIX: Supabase returns { data, error }, not { tasks, error }
+    const { data: tasks, error: fetchError } = await supabase
+      .from("tasks")
+      .select("id")
+      .eq("module_id", moduleId);
+
+    if (fetchError) {
+      return { error: fetchError.message };
+    }
+
+    // Delete all associated documentation for tasks in this module
+    if (tasks && tasks.length > 0) {
+      const taskIds = tasks.map((t) => t.id);
+      await supabase
+        .from("task_documentation")
+        .delete()
+        .in("task_id", taskIds);
+
+      // Delete all tasks in this module
+      await supabase
+        .from("tasks")
+        .delete()
+        .eq("module_id", moduleId);
+    }
+
+    // Finally delete the module itself
+    const { error } = await supabase
+      .from("modules")
+      .delete()
+      .eq("id", moduleId);
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    revalidatePath("/documentation");
+    return { error: null };
+  } catch (err) {
+    console.error("Delete module error:", err);
+    return { error: "Failed to delete module" };
   }
 }
 

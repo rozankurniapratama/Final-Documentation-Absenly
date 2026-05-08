@@ -16,6 +16,7 @@ import {
   Trash2,
   X,
   Check,
+  AlertTriangle,
 } from "lucide-react";
 import {
   toggleTaskAction,
@@ -23,6 +24,7 @@ import {
   updateTaskAction,
   updateModuleAction,
   deleteTaskAction,
+  deleteModuleAction,
 } from "./actions";
 
 interface Task {
@@ -55,11 +57,11 @@ const getTaskIcon = (name: string) => {
 const getTaskColor = (order: number) => {
   switch (order) {
     case 1:
-      return "bg-[#a8d5ff]"; // Technical - blue
+      return "bg-[#a8d5ff]";
     case 2:
-      return "bg-[#ffd60a]"; // API - yellow
+      return "bg-[#ffd60a]";
     case 3:
-      return "bg-[#4ade80]"; // User Guide - green
+      return "bg-[#4ade80]";
     default:
       return "bg-white";
   }
@@ -80,14 +82,15 @@ export default function DocumentationDashboard({
   const [updatingTasks, setUpdatingTasks] = useState<Set<string>>(new Set());
   const [updatingModules, setUpdatingModules] = useState<Set<string>>(new Set());
 
-  // Edit/Delete state for tasks
+  // Task edit/delete state
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editTaskValue, setEditTaskValue] = useState("");
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
-  // Edit state for modules
+  // Module edit/delete state
   const [editingModuleId, setEditingModuleId] = useState<string | null>(null);
   const [editModuleValue, setEditModuleValue] = useState("");
+  const [deletingModuleId, setDeletingModuleId] = useState<string | null>(null);
 
   // Toggle module expansion
   const toggleModule = (moduleId: string) => {
@@ -292,7 +295,6 @@ export default function DocumentationDashboard({
 
     setUpdatingModules((prev) => new Set(prev).add(moduleId));
 
-    // Optimistic update
     setModules((prev) =>
       prev.map((module) =>
         module.id === moduleId ? { ...module, name: editModuleValue.trim() } : module
@@ -302,7 +304,6 @@ export default function DocumentationDashboard({
     const result = await updateModuleAction(moduleId, editModuleValue.trim());
 
     if (result.error) {
-      // Revert on error
       setModules((prev) =>
         prev.map((module) =>
           module.id === moduleId ? { ...module, name: editModuleValue } : module
@@ -333,6 +334,45 @@ export default function DocumentationDashboard({
     } else if (e.key === "Escape") {
       handleEditModuleCancel(e as unknown as React.MouseEvent);
     }
+  };
+
+  const handleDeleteModule = async (
+    e: React.MouseEvent,
+    moduleId: string,
+    taskCount: number
+  ) => {
+    e.stopPropagation();
+
+    const warning = taskCount > 0
+      ? `⚠️ This will delete the module AND all ${taskCount} task(s) inside it.\n\nAre you sure you want to continue?`
+      : "Are you sure you want to delete this module?";
+
+    if (!confirm(warning)) return;
+
+    setDeletingModuleId(moduleId);
+    setUpdatingModules((prev) => new Set(prev).add(moduleId));
+
+    // Optimistic update: remove module from UI
+    setModules((prev) => prev.filter((m) => m.id !== moduleId));
+    setExpandedModules((prev) => {
+      const next = new Set(prev);
+      next.delete(moduleId);
+      return next;
+    });
+
+    const result = await deleteModuleAction(moduleId);
+
+    if (result.error) {
+      alert("Failed to delete module: " + result.error);
+      router.refresh();
+    }
+
+    setDeletingModuleId(null);
+    setUpdatingModules((prev) => {
+      const next = new Set(prev);
+      next.delete(moduleId);
+      return next;
+    });
   };
 
   // ==================== FILTER & STATS ====================
@@ -513,12 +553,13 @@ export default function DocumentationDashboard({
             const isExpanded = expandedModules.has(module.id);
             const isEditingModule = editingModuleId === module.id;
             const isUpdatingModule = updatingModules.has(module.id);
+            const isDeletingModule = deletingModuleId === module.id;
 
             return (
               <div
                 key={module.id}
                 className={`brutal-border brutal-shadow transition-all ${isComplete ? "bg-[#4ade80]/20" : "bg-card"
-                  } ${isUpdatingModule ? "opacity-70" : ""}`}
+                  } ${isUpdatingModule || isDeletingModule ? "opacity-70" : ""}`}
               >
                 {/* Module Header */}
                 <div className="w-full p-4 flex items-center justify-between hover:bg-secondary/50 transition-colors">
@@ -526,6 +567,7 @@ export default function DocumentationDashboard({
                     <button
                       onClick={() => toggleModule(module.id)}
                       className="flex-shrink-0"
+                      disabled={isEditingModule || isDeletingModule}
                     >
                       {isExpanded ? (
                         <ChevronDown className="w-6 h-6" />
@@ -546,27 +588,31 @@ export default function DocumentationDashboard({
                             onKeyDown={(e) => handleEditModuleKeyPress(e, module.id)}
                             onClick={(e) => e.stopPropagation()}
                             autoFocus
-                            className="flex-1 px-2 py-1 brutal-border bg-background font-mono font-bold text-lg outline-none focus:ring-2 focus:ring-primary"
+                            disabled={isUpdatingModule}
+                            className="flex-1 px-2 py-1 brutal-border bg-background font-mono font-bold text-lg outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                           />
                           <button
                             onClick={(e) => handleEditModuleSave(module.id, e)}
-                            className="p-1 hover:bg-[#4ade80] brutal-border transition-colors"
+                            className="p-1 hover:bg-[#4ade80] brutal-border transition-colors disabled:opacity-50"
                             title="Save"
+                            disabled={isUpdatingModule}
                           >
                             <Check className="w-4 h-4" />
                           </button>
                           <button
                             onClick={handleEditModuleCancel}
-                            className="p-1 hover:bg-destructive brutal-border transition-colors"
+                            className="p-1 hover:bg-destructive brutal-border transition-colors disabled:opacity-50"
                             title="Cancel"
+                            disabled={isUpdatingModule}
                           >
                             <X className="w-4 h-4" />
                           </button>
                         </div>
                       ) : (
                         <span
-                          className="font-mono font-bold text-lg truncate block"
+                          className="font-mono font-bold text-lg truncate block cursor-pointer"
                           title={module.name}
+                          onClick={() => toggleModule(module.id)}
                         >
                           {module.name}
                         </span>
@@ -574,17 +620,34 @@ export default function DocumentationDashboard({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    {/* Edit Module Button */}
-                    {!isEditingModule && (
-                      <button
-                        onClick={(e) => handleEditModuleStart(module, e)}
-                        disabled={isUpdatingModule}
-                        className="p-2 hover:bg-[#a8d5ff] brutal-border transition-colors disabled:opacity-50"
-                        title="Edit module name"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {/* Module Action Buttons */}
+                    {!isEditingModule && !isDeletingModule && (
+                      <>
+                        <button
+                          onClick={(e) => handleEditModuleStart(module, e)}
+                          disabled={isUpdatingModule}
+                          className="p-2 hover:bg-[#a8d5ff] brutal-border transition-colors disabled:opacity-50"
+                          title="Edit module name"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => handleDeleteModule(e, module.id, module.tasks.length)}
+                          disabled={isUpdatingModule}
+                          className="p-2 hover:bg-destructive brutal-border transition-colors disabled:opacity-50"
+                          title="Delete module"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
+
+                    {isDeletingModule && (
+                      <span className="flex items-center gap-1 text-xs text-destructive font-bold">
+                        <AlertTriangle className="w-4 h-4" />
+                        Deleting...
+                      </span>
                     )}
 
                     <span

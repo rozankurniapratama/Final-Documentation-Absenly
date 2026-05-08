@@ -34,12 +34,12 @@ export async function updateTaskAction(
 ): Promise<{ error: string | null }> {
   try {
     const supabase = await createClient();
-    
+
     const { error } = await supabase
       .from("tasks")
-      .update({ 
-        ...updates, 
-        updated_at: new Date().toISOString() 
+      .update({
+        ...updates,
+        updated_at: new Date().toISOString()
       })
       .eq("id", taskId);
 
@@ -55,18 +55,45 @@ export async function updateTaskAction(
   }
 }
 
+export async function updateModuleAction(
+  moduleId: string,
+  newName: string
+): Promise<{ error: string | null }> {
+  try {
+    const supabase = await createClient();
+
+    const { error } = await supabase
+      .from("modules")
+      .update({
+        name: newName,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", moduleId);
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    revalidatePath("/documentation");
+    return { error: null };
+  } catch (err) {
+    console.error("Update module error:", err);
+    return { error: "Failed to update module" };
+  }
+}
+
 export async function deleteTaskAction(
   taskId: string
 ): Promise<{ error: string | null }> {
   try {
     const supabase = await createClient();
-    
+
     // First delete any associated documentation
     await supabase
       .from("task_documentation")
       .delete()
       .eq("task_id", taskId);
-    
+
     // Then delete the task
     const { error } = await supabase
       .from("tasks")

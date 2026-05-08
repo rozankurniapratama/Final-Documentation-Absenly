@@ -21,6 +21,7 @@ import {
   toggleTaskAction,
   logoutAction,
   updateTaskAction,
+  updateModuleAction,
   deleteTaskAction,
 } from "./actions";
 
@@ -77,11 +78,16 @@ export default function DocumentationDashboard({
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<FilterOption>("all");
   const [updatingTasks, setUpdatingTasks] = useState<Set<string>>(new Set());
+  const [updatingModules, setUpdatingModules] = useState<Set<string>>(new Set());
 
-  // Edit/Delete state
+  // Edit/Delete state for tasks
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState("");
+  const [editTaskValue, setEditTaskValue] = useState("");
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+
+  // Edit state for modules
+  const [editingModuleId, setEditingModuleId] = useState<string | null>(null);
+  const [editModuleValue, setEditModuleValue] = useState("");
 
   // Toggle module expansion
   const toggleModule = (moduleId: string) => {
@@ -167,45 +173,43 @@ export default function DocumentationDashboard({
     router.push("/login");
   };
 
-  // Start editing task name
-  const handleEditStart = (task: Task, e: React.MouseEvent) => {
+  // ==================== TASK EDITING ====================
+
+  const handleEditTaskStart = (task: Task, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingTaskId(task.id);
-    setEditValue(task.name);
+    setEditTaskValue(task.name);
   };
 
-  // Save edited task name
-  const handleEditSave = async (taskId: string, moduleId: string, e: React.MouseEvent) => {
+  const handleEditTaskSave = async (taskId: string, moduleId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!editValue.trim()) return;
+    if (!editTaskValue.trim()) return;
 
     setUpdatingTasks((prev) => new Set(prev).add(taskId));
 
-    // Optimistic update
     setModules((prev) =>
       prev.map((module) =>
         module.id === moduleId
           ? {
             ...module,
             tasks: module.tasks.map((task) =>
-              task.id === taskId ? { ...task, name: editValue.trim() } : task
+              task.id === taskId ? { ...task, name: editTaskValue.trim() } : task
             ),
           }
           : module
       )
     );
 
-    const result = await updateTaskAction(taskId, { name: editValue.trim() });
+    const result = await updateTaskAction(taskId, { name: editTaskValue.trim() });
 
     if (result.error) {
-      // Revert on error
       setModules((prev) =>
         prev.map((module) =>
           module.id === moduleId
             ? {
               ...module,
               tasks: module.tasks.map((task) =>
-                task.id === taskId ? { ...task, name: editValue } : task
+                task.id === taskId ? { ...task, name: editTaskValue } : task
               ),
             }
             : module
@@ -222,26 +226,23 @@ export default function DocumentationDashboard({
     });
   };
 
-  // Cancel editing
-  const handleEditCancel = (e: React.MouseEvent) => {
+  const handleEditTaskCancel = (e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingTaskId(null);
   };
 
-  // Handle key press in edit input
-  const handleEditKeyPress = (
+  const handleEditTaskKeyPress = (
     e: React.KeyboardEvent,
     taskId: string,
     moduleId: string
   ) => {
     if (e.key === "Enter") {
-      handleEditSave(taskId, moduleId, e as unknown as React.MouseEvent);
+      handleEditTaskSave(taskId, moduleId, e as unknown as React.MouseEvent);
     } else if (e.key === "Escape") {
-      handleEditCancel(e as unknown as React.MouseEvent);
+      handleEditTaskCancel(e as unknown as React.MouseEvent);
     }
   };
 
-  // Delete task
   const handleDeleteTask = async (
     e: React.MouseEvent,
     moduleId: string,
@@ -254,7 +255,6 @@ export default function DocumentationDashboard({
     setDeletingTaskId(taskId);
     setUpdatingTasks((prev) => new Set(prev).add(taskId));
 
-    // Optimistic update: remove task from UI
     setModules((prev) =>
       prev.map((module) =>
         module.id === moduleId
@@ -266,9 +266,8 @@ export default function DocumentationDashboard({
     const result = await deleteTaskAction(taskId);
 
     if (result.error) {
-      // Revert on error - reload modules from server would be ideal, but for now:
       alert("Failed to delete task: " + result.error);
-      router.refresh(); // Force refresh to get fresh data
+      router.refresh();
     }
 
     setDeletingTaskId(null);
@@ -279,7 +278,65 @@ export default function DocumentationDashboard({
     });
   };
 
-  // Filter and search modules
+  // ==================== MODULE EDITING ====================
+
+  const handleEditModuleStart = (module: Module, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingModuleId(module.id);
+    setEditModuleValue(module.name);
+  };
+
+  const handleEditModuleSave = async (moduleId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!editModuleValue.trim()) return;
+
+    setUpdatingModules((prev) => new Set(prev).add(moduleId));
+
+    // Optimistic update
+    setModules((prev) =>
+      prev.map((module) =>
+        module.id === moduleId ? { ...module, name: editModuleValue.trim() } : module
+      )
+    );
+
+    const result = await updateModuleAction(moduleId, editModuleValue.trim());
+
+    if (result.error) {
+      // Revert on error
+      setModules((prev) =>
+        prev.map((module) =>
+          module.id === moduleId ? { ...module, name: editModuleValue } : module
+        )
+      );
+      alert("Failed to update module: " + result.error);
+    }
+
+    setEditingModuleId(null);
+    setUpdatingModules((prev) => {
+      const next = new Set(prev);
+      next.delete(moduleId);
+      return next;
+    });
+  };
+
+  const handleEditModuleCancel = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingModuleId(null);
+  };
+
+  const handleEditModuleKeyPress = (
+    e: React.KeyboardEvent,
+    moduleId: string
+  ) => {
+    if (e.key === "Enter") {
+      handleEditModuleSave(moduleId, e as unknown as React.MouseEvent);
+    } else if (e.key === "Escape") {
+      handleEditModuleCancel(e as unknown as React.MouseEvent);
+    }
+  };
+
+  // ==================== FILTER & STATS ====================
+
   const filteredModules = useMemo(() => {
     return modules
       .map((module) => {
@@ -307,7 +364,6 @@ export default function DocumentationDashboard({
       );
   }, [modules, searchQuery, filter]);
 
-  // Calculate progress stats
   const stats = useMemo(() => {
     const totalTasks = modules.reduce((acc, m) => acc + m.tasks.length, 0);
     const completedTasks = modules.reduce(
@@ -455,30 +511,82 @@ export default function DocumentationDashboard({
             ).length;
             const isComplete = moduleProgress === module.tasks.length;
             const isExpanded = expandedModules.has(module.id);
+            const isEditingModule = editingModuleId === module.id;
+            const isUpdatingModule = updatingModules.has(module.id);
 
             return (
               <div
                 key={module.id}
                 className={`brutal-border brutal-shadow transition-all ${isComplete ? "bg-[#4ade80]/20" : "bg-card"
-                  }`}
+                  } ${isUpdatingModule ? "opacity-70" : ""}`}
               >
                 {/* Module Header */}
-                <button
-                  onClick={() => toggleModule(module.id)}
-                  className="w-full p-4 flex items-center justify-between hover:bg-secondary/50 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    {isExpanded ? (
-                      <ChevronDown className="w-6 h-6" />
-                    ) : (
-                      <ChevronRight className="w-6 h-6" />
-                    )}
-                    <FolderCode className="w-6 h-6" />
-                    <span className="font-mono font-bold text-lg">
-                      {module.name}
-                    </span>
+                <div className="w-full p-4 flex items-center justify-between hover:bg-secondary/50 transition-colors">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <button
+                      onClick={() => toggleModule(module.id)}
+                      className="flex-shrink-0"
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className="w-6 h-6" />
+                      ) : (
+                        <ChevronRight className="w-6 h-6" />
+                      )}
+                    </button>
+                    <FolderCode className="w-6 h-6 flex-shrink-0" />
+
+                    {/* Module Name - Editable */}
+                    <div className="flex-1 min-w-0">
+                      {isEditingModule ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={editModuleValue}
+                            onChange={(e) => setEditModuleValue(e.target.value)}
+                            onKeyDown={(e) => handleEditModuleKeyPress(e, module.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            autoFocus
+                            className="flex-1 px-2 py-1 brutal-border bg-background font-mono font-bold text-lg outline-none focus:ring-2 focus:ring-primary"
+                          />
+                          <button
+                            onClick={(e) => handleEditModuleSave(module.id, e)}
+                            className="p-1 hover:bg-[#4ade80] brutal-border transition-colors"
+                            title="Save"
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={handleEditModuleCancel}
+                            className="p-1 hover:bg-destructive brutal-border transition-colors"
+                            title="Cancel"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span
+                          className="font-mono font-bold text-lg truncate block"
+                          title={module.name}
+                        >
+                          {module.name}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3">
+
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    {/* Edit Module Button */}
+                    {!isEditingModule && (
+                      <button
+                        onClick={(e) => handleEditModuleStart(module, e)}
+                        disabled={isUpdatingModule}
+                        className="p-2 hover:bg-[#a8d5ff] brutal-border transition-colors disabled:opacity-50"
+                        title="Edit module name"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                    )}
+
                     <span
                       className={`px-3 py-1 brutal-border text-sm font-bold ${isComplete ? "bg-[#4ade80]" : "bg-[#ffd60a]"
                         }`}
@@ -487,24 +595,24 @@ export default function DocumentationDashboard({
                     </span>
                     {isComplete && <CheckCircle2 className="w-6 h-6" />}
                   </div>
-                </button>
+                </div>
 
                 {/* Tasks */}
                 {isExpanded && (
                   <div className="border-t-2 border-border">
                     {(module.filteredTasks || module.tasks).map((task) => {
-                      const isEditing = editingTaskId === task.id;
-                      const isDeleting = deletingTaskId === task.id;
-                      const isUpdating = updatingTasks.has(task.id);
+                      const isEditingTask = editingTaskId === task.id;
+                      const isDeletingTask = deletingTaskId === task.id;
+                      const isUpdatingTask = updatingTasks.has(task.id);
 
                       return (
                         <div
                           key={task.id}
-                          onClick={() => !isEditing && openTaskEditor(task.id)}
+                          onClick={() => !isEditingTask && openTaskEditor(task.id)}
                           className={`p-4 border-b-2 border-border last:border-b-0 flex items-center gap-4 transition-all ${task.is_completed
                               ? "bg-[#4ade80]/10"
                               : "hover:bg-secondary/50"
-                            } ${isUpdating ? "opacity-60" : ""}`}
+                            } ${isUpdatingTask ? "opacity-60" : ""}`}
                         >
                           {/* Custom Checkbox */}
                           <button
@@ -516,11 +624,11 @@ export default function DocumentationDashboard({
                                 task.is_completed
                               )
                             }
-                            disabled={isUpdating}
+                            disabled={isUpdatingTask}
                             className={`w-6 h-6 brutal-border flex-shrink-0 flex items-center justify-center transition-all ${task.is_completed
                                 ? "bg-primary text-primary-foreground"
                                 : "bg-card hover:bg-accent"
-                              } ${isUpdating ? "cursor-not-allowed" : ""}`}
+                              } ${isUpdatingTask ? "cursor-not-allowed" : ""}`}
                           >
                             {task.is_completed && (
                               <svg
@@ -557,14 +665,14 @@ export default function DocumentationDashboard({
 
                           {/* Task Name - Editable */}
                           <div className="flex-1 min-w-0">
-                            {isEditing ? (
+                            {isEditingTask ? (
                               <div className="flex items-center gap-2">
                                 <input
                                   type="text"
-                                  value={editValue}
-                                  onChange={(e) => setEditValue(e.target.value)}
+                                  value={editTaskValue}
+                                  onChange={(e) => setEditTaskValue(e.target.value)}
                                   onKeyDown={(e) =>
-                                    handleEditKeyPress(e, task.id, module.id)
+                                    handleEditTaskKeyPress(e, task.id, module.id)
                                   }
                                   onClick={(e) => e.stopPropagation()}
                                   autoFocus
@@ -572,7 +680,7 @@ export default function DocumentationDashboard({
                                 />
                                 <button
                                   onClick={(e) =>
-                                    handleEditSave(task.id, module.id, e)
+                                    handleEditTaskSave(task.id, module.id, e)
                                   }
                                   className="p-1 hover:bg-[#4ade80] brutal-border transition-colors"
                                   title="Save"
@@ -580,7 +688,7 @@ export default function DocumentationDashboard({
                                   <Check className="w-4 h-4" />
                                 </button>
                                 <button
-                                  onClick={handleEditCancel}
+                                  onClick={handleEditTaskCancel}
                                   className="p-1 hover:bg-destructive brutal-border transition-colors"
                                   title="Cancel"
                                 >
@@ -602,11 +710,11 @@ export default function DocumentationDashboard({
 
                           {/* Action Buttons */}
                           <div className="flex items-center gap-1 flex-shrink-0">
-                            {!isEditing && !isDeleting && (
+                            {!isEditingTask && !isDeletingTask && (
                               <>
                                 <button
-                                  onClick={(e) => handleEditStart(task, e)}
-                                  disabled={isUpdating}
+                                  onClick={(e) => handleEditTaskStart(task, e)}
+                                  disabled={isUpdatingTask}
                                   className="p-2 hover:bg-[#a8d5ff] brutal-border transition-colors disabled:opacity-50"
                                   title="Edit task name"
                                 >
@@ -616,7 +724,7 @@ export default function DocumentationDashboard({
                                   onClick={(e) =>
                                     handleDeleteTask(e, module.id, task.id)
                                   }
-                                  disabled={isUpdating}
+                                  disabled={isUpdatingTask}
                                   className="p-2 hover:bg-destructive brutal-border transition-colors disabled:opacity-50"
                                   title="Delete task"
                                 >
@@ -624,7 +732,7 @@ export default function DocumentationDashboard({
                                 </button>
                               </>
                             )}
-                            {isDeleting && (
+                            {isDeletingTask && (
                               <span className="text-xs text-muted-foreground">
                                 Deleting...
                               </span>
@@ -632,7 +740,7 @@ export default function DocumentationDashboard({
                           </div>
 
                           {/* Open indicator */}
-                          {!isEditing && (
+                          {!isEditingTask && (
                             <span className="text-xs font-mono text-muted-foreground uppercase hidden md:block">
                               Click to edit
                             </span>

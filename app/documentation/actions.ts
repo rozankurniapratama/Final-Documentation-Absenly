@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { clearSession } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 
+// ==================== TASK ACTIONS ====================
+
 export async function toggleTaskAction(
   taskId: string,
   completed: boolean
@@ -14,10 +16,15 @@ export async function toggleTaskAction(
 
     const { error } = await supabase
       .from("tasks")
-      .update({ is_completed: completed, updated_at: new Date().toISOString() })
+      .update({
+        is_completed: completed,
+        updated_at: new Date().toISOString()
+      })
       .eq("id", taskId);
 
-    if (error) return { error: error.message };
+    if (error) {
+      return { error: error.message };
+    }
 
     revalidatePath("/documentation");
     return { error: null };
@@ -36,10 +43,15 @@ export async function updateTaskAction(
 
     const { error } = await supabase
       .from("tasks")
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update({
+        ...updates,
+        updated_at: new Date().toISOString()
+      })
       .eq("id", taskId);
 
-    if (error) return { error: error.message };
+    if (error) {
+      return { error: error.message };
+    }
 
     revalidatePath("/documentation");
     return { error: null };
@@ -48,6 +60,38 @@ export async function updateTaskAction(
     return { error: "Failed to update task" };
   }
 }
+
+export async function deleteTaskAction(
+  taskId: string
+): Promise<{ error: string | null }> {
+  try {
+    const supabase = await createClient();
+
+    // First delete associated documentation
+    await supabase
+      .from("task_documentation")
+      .delete()
+      .eq("task_id", taskId);
+
+    // Then delete the task
+    const { error } = await supabase
+      .from("tasks")
+      .delete()
+      .eq("id", taskId);
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    revalidatePath("/documentation");
+    return { error: null };
+  } catch (err) {
+    console.error("Delete task error:", err);
+    return { error: "Failed to delete task" };
+  }
+}
+
+// ==================== MODULE ACTIONS ====================
 
 export async function updateModuleAction(
   moduleId: string,
@@ -61,7 +105,9 @@ export async function updateModuleAction(
       .update({ name: newName })
       .eq("id", moduleId);
 
-    if (error) return { error: error.message };
+    if (error) {
+      return { error: error.message };
+    }
 
     revalidatePath("/documentation");
     return { error: null };
@@ -71,64 +117,48 @@ export async function updateModuleAction(
   }
 }
 
-export async function deleteTaskAction(
-  taskId: string
-): Promise<{ error: string | null }> {
-  try {
-    const supabase = await createClient();
-
-    await supabase
-      .from("task_documentation")
-      .delete()
-      .eq("task_id", taskId);
-
-    const { error } = await supabase
-      .from("tasks")
-      .delete()
-      .eq("id", taskId);
-
-    if (error) return { error: error.message };
-
-    revalidatePath("/documentation");
-    return { error: null };
-  } catch (err) {
-    console.error("Delete task error:", err);
-    return { error: "Failed to delete task" };
-  }
-}
-
 export async function deleteModuleAction(
   moduleId: string
 ): Promise<{ error: string | null }> {
   try {
     const supabase = await createClient();
 
+    // Get all tasks in this module
     const { tasks, error: fetchError } = await supabase
       .from("tasks")
       .select("id")
       .eq("module_id", moduleId);
 
-    if (fetchError) return { error: fetchError.message };
+    if (fetchError) {
+      return { error: fetchError.message };
+    }
 
+    // If there are tasks, delete their documentation first, then the tasks
     if (tasks && tasks.length > 0) {
       const taskIds = tasks.map((t) => t.id);
+
+      // Delete all task_documentation entries for these tasks
       await supabase
         .from("task_documentation")
         .delete()
         .in("task_id", taskIds);
 
+      // Delete all tasks in this module
       await supabase
         .from("tasks")
         .delete()
         .eq("module_id", moduleId);
     }
 
+    // Finally delete the module itself
     const { error } = await supabase
       .from("modules")
       .delete()
       .eq("id", moduleId);
 
-    if (error) return { error: error.message };
+    if (error) {
+      return { error: error.message };
+    }
 
     revalidatePath("/documentation");
     return { error: null };
@@ -138,29 +168,36 @@ export async function deleteModuleAction(
   }
 }
 
-// ✅ NEW: Create Module
 export async function createModuleAction(
   name: string
 ): Promise<{ data: { id: string } | null; error: string | null }> {
   try {
     const supabase = await createClient();
 
-    // Get next display_order
+    // Get the next display_order value
     const { count, error: countError } = await supabase
       .from("modules")
       .select("*", { count: "exact", head: true });
 
-    if (countError) return { data: null, error: countError.message };
+    if (countError) {
+      return { data: null, error: countError.message };
+    }
 
     const nextOrder = (count ?? 0) + 1;
 
+    // Insert the new module
     const { data, error } = await supabase
       .from("modules")
-      .insert({ name, display_order: nextOrder })
+      .insert({
+        name: name.trim(),
+        display_order: nextOrder
+      })
       .select("id")
       .single();
 
-    if (error) return { data: null, error: error.message };
+    if (error) {
+      return { data: null, error: error.message };
+    }
 
     revalidatePath("/documentation");
     return { data: { id: data.id }, error: null };
@@ -170,7 +207,6 @@ export async function createModuleAction(
   }
 }
 
-// ✅ NEW: Create Task
 export async function createTaskAction(
   moduleId: string,
   data: { name: string; task_order: number }
@@ -181,7 +217,7 @@ export async function createTaskAction(
     const { data: newTask, error } = await supabase
       .from("tasks")
       .insert({
-        name: data.name,
+        name: data.name.trim(),
         task_order: data.task_order,
         is_completed: false,
         module_id: moduleId,
@@ -190,7 +226,9 @@ export async function createTaskAction(
       .select("id")
       .single();
 
-    if (error) return { data: null, error: error.message };
+    if (error) {
+      return { data: null, error: error.message };
+    }
 
     revalidatePath("/documentation");
     return { data: { id: newTask.id }, error: null };
@@ -199,6 +237,8 @@ export async function createTaskAction(
     return { data: null, error: "Failed to create task" };
   }
 }
+
+// ==================== DOCUMENTATION ACTIONS ====================
 
 export async function saveDocumentationAction(
   taskId: string,
@@ -217,10 +257,14 @@ export async function saveDocumentationAction(
           drawing_content: drawingContent,
           updated_at: new Date().toISOString(),
         },
-        { onConflict: "task_id" }
+        {
+          onConflict: "task_id"
+        }
       );
 
-    if (error) return { error: error.message };
+    if (error) {
+      return { error: error.message };
+    }
 
     return { error: null };
   } catch (err) {
@@ -229,7 +273,9 @@ export async function saveDocumentationAction(
   }
 }
 
-export async function getDocumentationAction(taskId: string): Promise<{
+export async function getDocumentationAction(
+  taskId: string
+): Promise<{
   textContent: object | null;
   drawingContent: object | null;
   error: string | null;
@@ -243,8 +289,13 @@ export async function getDocumentationAction(taskId: string): Promise<{
       .eq("task_id", taskId)
       .single();
 
+    // PGRST116 = "no rows returned", which is fine for new tasks
     if (error && error.code !== "PGRST116") {
-      return { textContent: null, drawingContent: null, error: error.message };
+      return {
+        textContent: null,
+        drawingContent: null,
+        error: error.message
+      };
     }
 
     return {
@@ -261,6 +312,8 @@ export async function getDocumentationAction(taskId: string): Promise<{
     };
   }
 }
+
+// ==================== AUTH ACTIONS ====================
 
 export async function logoutAction(): Promise<void> {
   await clearSession();

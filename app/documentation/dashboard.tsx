@@ -1,3 +1,4 @@
+// app/documentation/dashboard.tsx
 "use client";
 
 import { useState, useMemo, useRef } from "react";
@@ -34,9 +35,9 @@ import {
   createTaskAction,
 } from "./actions";
 
-// PDF imports
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
+// PDF imports - will be dynamically loaded
+// import jsPDF from "jspdf";
+// import html2canvas from "html2canvas";
 
 interface Task {
   id: string;
@@ -461,17 +462,25 @@ export default function DocumentationDashboard({
     else if (e.key === "Escape") handleCreateModuleCancel();
   };
 
-  // ==================== PDF EXPORT ====================
+  // ==================== PDF EXPORT (Dynamic Imports) ====================
   const handleExportPdf = async () => {
+    // Browser guard
+    if (typeof window === "undefined") {
+      alert("PDF export is only available in the browser");
+      return;
+    }
+
     setExportingPdf(true);
     try {
       if (!contentRef.current) return;
 
+      // Dynamic imports - only loaded in browser
+      const jsPDF = (await import("jspdf")).default;
+      const html2canvas = (await import("html2canvas")).default;
+
       // Temporarily expand all for full export
       const wasExpanded = new Set(expandedModules);
       setExpandedModules(new Set(modules.map((m) => m.id)));
-
-      // Wait for DOM to update
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       const canvas = await html2canvas(contentRef.current, {
@@ -488,8 +497,8 @@ export default function DocumentationDashboard({
         format: "a4",
       });
 
-      const imgWidth = 210; // A4 width in mm
-      const pageHeight = 297; // A4 height in mm
+      const imgWidth = 210;
+      const pageHeight = 297;
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
       let heightLeft = imgHeight;
       let position = 0;
@@ -505,8 +514,6 @@ export default function DocumentationDashboard({
       }
 
       pdf.save(`odoo-documentation-${new Date().toISOString().split("T")[0]}.pdf`);
-
-      // Restore expansion state
       setExpandedModules(wasExpanded);
     } catch (err) {
       console.error("PDF export error:", err);
@@ -567,19 +574,21 @@ export default function DocumentationDashboard({
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleExportPdf}
-              disabled={exportingPdf}
-              className="px-4 py-2 brutal-border bg-card hover:bg-[#a8d5ff] font-bold text-sm flex items-center gap-2 transition-all disabled:opacity-50"
-              title="Export dashboard to PDF"
-            >
-              {exportingPdf ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Download className="w-4 h-4" />
-              )}
-              {exportingPdf ? "Exporting..." : "Export PDF"}
-            </button>
+            {typeof window !== "undefined" && (
+              <button
+                onClick={handleExportPdf}
+                disabled={exportingPdf}
+                className="px-4 py-2 brutal-border bg-card hover:bg-[#a8d5ff] font-bold text-sm flex items-center gap-2 transition-all disabled:opacity-50"
+                title="Export dashboard to PDF"
+              >
+                {exportingPdf ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
+                {exportingPdf ? "Exporting..." : "Export PDF"}
+              </button>
+            )}
             <button
               onClick={handleLogout}
               className="px-4 py-2 brutal-border bg-card hover:bg-destructive/10 font-bold text-sm flex items-center gap-2 transition-all"

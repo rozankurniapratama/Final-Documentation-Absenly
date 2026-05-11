@@ -1,3 +1,4 @@
+// app/documentation/actions.ts
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
@@ -16,9 +17,7 @@ export async function toggleTaskAction(
       .update({ is_completed: completed, updated_at: new Date().toISOString() })
       .eq("id", taskId);
 
-    if (error) {
-      return { error: error.message };
-    }
+    if (error) return { error: error.message };
 
     revalidatePath("/documentation");
     return { error: null };
@@ -37,15 +36,10 @@ export async function updateTaskAction(
 
     const { error } = await supabase
       .from("tasks")
-      .update({
-        ...updates,
-        updated_at: new Date().toISOString()
-      })
+      .update({ ...updates, updated_at: new Date().toISOString() })
       .eq("id", taskId);
 
-    if (error) {
-      return { error: error.message };
-    }
+    if (error) return { error: error.message };
 
     revalidatePath("/documentation");
     return { error: null };
@@ -62,15 +56,12 @@ export async function updateModuleAction(
   try {
     const supabase = await createClient();
 
-    // ✅ FIX: Removed updated_at since your modules table doesn't have it
     const { error } = await supabase
       .from("modules")
       .update({ name: newName })
       .eq("id", moduleId);
 
-    if (error) {
-      return { error: error.message };
-    }
+    if (error) return { error: error.message };
 
     revalidatePath("/documentation");
     return { error: null };
@@ -96,9 +87,7 @@ export async function deleteTaskAction(
       .delete()
       .eq("id", taskId);
 
-    if (error) {
-      return { error: error.message };
-    }
+    if (error) return { error: error.message };
 
     revalidatePath("/documentation");
     return { error: null };
@@ -114,15 +103,12 @@ export async function deleteModuleAction(
   try {
     const supabase = await createClient();
 
-    // ✅ FIX: Properly destructured { data, error }
     const { tasks, error: fetchError } = await supabase
       .from("tasks")
       .select("id")
       .eq("module_id", moduleId);
 
-    if (fetchError) {
-      return { error: fetchError.message };
-    }
+    if (fetchError) return { error: fetchError.message };
 
     if (tasks && tasks.length > 0) {
       const taskIds = tasks.map((t) => t.id);
@@ -142,15 +128,75 @@ export async function deleteModuleAction(
       .delete()
       .eq("id", moduleId);
 
-    if (error) {
-      return { error: error.message };
-    }
+    if (error) return { error: error.message };
 
     revalidatePath("/documentation");
     return { error: null };
   } catch (err) {
     console.error("Delete module error:", err);
     return { error: "Failed to delete module" };
+  }
+}
+
+// ✅ NEW: Create Module
+export async function createModuleAction(
+  name: string
+): Promise<{ data: { id: string } | null; error: string | null }> {
+  try {
+    const supabase = await createClient();
+
+    // Get next display_order
+    const { count, error: countError } = await supabase
+      .from("modules")
+      .select("*", { count: "exact", head: true });
+
+    if (countError) return { data: null, error: countError.message };
+
+    const nextOrder = (count ?? 0) + 1;
+
+    const { data, error } = await supabase
+      .from("modules")
+      .insert({ name, display_order: nextOrder })
+      .select("id")
+      .single();
+
+    if (error) return { data: null, error: error.message };
+
+    revalidatePath("/documentation");
+    return { data: { id: data.id }, error: null };
+  } catch (err) {
+    console.error("Create module error:", err);
+    return { data: null, error: "Failed to create module" };
+  }
+}
+
+// ✅ NEW: Create Task
+export async function createTaskAction(
+  moduleId: string,
+  data: { name: string; task_order: number }
+): Promise<{ data: { id: string } | null; error: string | null }> {
+  try {
+    const supabase = await createClient();
+
+    const { data: newTask, error } = await supabase
+      .from("tasks")
+      .insert({
+        name: data.name,
+        task_order: data.task_order,
+        is_completed: false,
+        module_id: moduleId,
+        updated_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (error) return { data: null, error: error.message };
+
+    revalidatePath("/documentation");
+    return { data: { id: newTask.id }, error: null };
+  } catch (err) {
+    console.error("Create task error:", err);
+    return { data: null, error: "Failed to create task" };
   }
 }
 
@@ -162,21 +208,19 @@ export async function saveDocumentationAction(
   try {
     const supabase = await createClient();
 
-    const { error } = await supabase.from("task_documentation").upsert(
-      {
-        task_id: taskId,
-        text_content: textContent,
-        drawing_content: drawingContent,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: "task_id",
-      }
-    );
+    const { error } = await supabase
+      .from("task_documentation")
+      .upsert(
+        {
+          task_id: taskId,
+          text_content: textContent,
+          drawing_content: drawingContent,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "task_id" }
+      );
 
-    if (error) {
-      return { error: error.message };
-    }
+    if (error) return { error: error.message };
 
     return { error: null };
   } catch (err) {

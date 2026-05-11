@@ -328,14 +328,15 @@ function MermaidBlock({
         <button
           type="button"
           onClick={() => setViewMode("diagram")}
-          className={`px-2 py-1 rounded text-xs font-medium transition-all flex items-center gap-1 ${viewMode === "diagram"
+          className={`px-2 py-1 rounded text-xs font-medium transition-all flex items-center gap-1 ${
+            viewMode === "diagram"
               ? dark
                 ? "bg-white/20 text-white"
                 : "bg-white text-gray-800 shadow-sm"
               : dark
                 ? "text-gray-400 hover:text-white"
                 : "text-gray-500 hover:text-gray-700"
-            }`}
+          }`}
         >
           <Eye className="w-3 h-3" />
           Preview
@@ -343,14 +344,15 @@ function MermaidBlock({
         <button
           type="button"
           onClick={() => setViewMode("code")}
-          className={`px-2 py-1 rounded text-xs font-medium transition-all flex items-center gap-1 ${viewMode === "code"
+          className={`px-2 py-1 rounded text-xs font-medium transition-all flex items-center gap-1 ${
+            viewMode === "code"
               ? dark
                 ? "bg-white/20 text-white"
                 : "bg-white text-gray-800 shadow-sm"
               : dark
                 ? "text-gray-400 hover:text-white"
                 : "text-gray-500 hover:text-gray-700"
-            }`}
+          }`}
         >
           <Code className="w-3 h-3" />
           Code
@@ -365,10 +367,11 @@ function MermaidBlock({
           <button
             type="button"
             onClick={handleZoomOut}
-            className={`p-1.5 rounded transition-colors ${dark
+            className={`p-1.5 rounded transition-colors ${
+              dark
                 ? "hover:bg-white/10 text-gray-300"
                 : "hover:bg-gray-100 text-gray-500"
-              }`}
+            }`}
           >
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
@@ -380,20 +383,22 @@ function MermaidBlock({
           <button
             type="button"
             onClick={handleZoomIn}
-            className={`p-1.5 rounded transition-colors ${dark
+            className={`p-1.5 rounded transition-colors ${
+              dark
                 ? "hover:bg-white/10 text-gray-300"
                 : "hover:bg-gray-100 text-gray-500"
-              }`}
+            }`}
           >
             <ZoomIn className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
             onClick={handleReset}
-            className={`p-1.5 rounded transition-colors ${dark
+            className={`p-1.5 rounded transition-colors ${
+              dark
                 ? "hover:bg-white/10 text-gray-300"
                 : "hover:bg-gray-100 text-gray-500"
-              }`}
+            }`}
           >
             <RotateCcw className="w-3.5 h-3.5" />
           </button>
@@ -406,10 +411,11 @@ function MermaidBlock({
       <button
         type="button"
         onClick={() => setIsFullscreen(true)}
-        className={`p-1.5 rounded transition-colors ${dark
+        className={`p-1.5 rounded transition-colors ${
+          dark
             ? "hover:bg-white/10 text-gray-300"
             : "hover:bg-gray-100 text-gray-500"
-          }`}
+        }`}
       >
         <Maximize2 className="w-3.5 h-3.5" />
       </button>
@@ -422,10 +428,11 @@ function MermaidBlock({
     <>
       <NodeViewWrapper
         as="div"
-        className={`mermaid-node my-6 ${selected
+        className={`mermaid-node my-6 ${
+          selected
             ? "ring-2 ring-purple-400 ring-offset-2 rounded-2xl"
             : ""
-          }`}
+        }`}
       >
         <div className="rounded-2xl border border-gray-200 overflow-hidden shadow-sm bg-white group">
           {/* Header */}
@@ -743,10 +750,11 @@ export default function TaskEditor({
       type="button"
       onClick={onClick}
       title={title}
-      className={`p-2 rounded transition-colors ${isActive
+      className={`p-2 rounded transition-colors ${
+        isActive
           ? "bg-gray-200 text-gray-900"
           : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-        }`}
+      }`}
     >
       {children}
     </button>
@@ -807,10 +815,11 @@ export default function TaskEditor({
           <button
             onClick={handleSave}
             disabled={isSaving || !hasChanges}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${isSaving || !hasChanges
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
+              isSaving || !hasChanges
                 ? "bg-gray-100 text-gray-400 cursor-not-allowed"
                 : "bg-black text-white hover:bg-gray-800 active:scale-[0.98]"
-              }`}
+            }`}
           >
             {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin" />

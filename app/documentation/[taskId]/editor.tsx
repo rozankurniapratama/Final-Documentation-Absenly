@@ -13,6 +13,15 @@ import {
   Table,
   Workflow,
   Network,
+  Maximize2,
+  Minimize2,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Code,
+  Eye,
+  X,
+  Grip,
 } from "lucide-react";
 import { saveDocumentationAction } from "../actions";
 import {
@@ -91,6 +100,14 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
   const [isRendering, setIsRendering] = useState(false);
+  const [viewMode, setViewMode] = useState<"diagram" | "code">("diagram");
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStart = useRef({ x: 0, y: 0 });
+  const panStart = useRef({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
   const counter = useRef(0);
   const mermaidRef = useRef<any>(null);
   const code = node.textContent;
@@ -147,93 +164,356 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
     };
   }, [code]);
 
-  return (
-    <NodeViewWrapper
-      as="div"
-      className={`mermaid-node my-6 ${selected ? "ring-2 ring-purple-400 ring-offset-2" : ""}`}
+  const handleZoomIn = useCallback(() => {
+    setZoom((z) => Math.min(z + 0.25, 3));
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    setZoom((z) => Math.max(z - 0.25, 0.25));
+  }, []);
+
+  const handleReset = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (zoom <= 1) return;
+      setIsDragging(true);
+      dragStart.current = { x: e.clientX, y: e.clientY };
+      panStart.current = { ...pan };
+      e.preventDefault();
+    },
+    [zoom, pan]
+  );
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!isDragging) return;
+      const dx = e.clientX - dragStart.current.x;
+      const dy = e.clientY - dragStart.current.y;
+      setPan({
+        x: panStart.current.x + dx,
+        y: panStart.current.y + dy,
+      });
+    },
+    [isDragging]
+  );
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      setZoom((z) => {
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        return Math.min(Math.max(z + delta, 0.25), 3);
+      });
+    }
+  }, []);
+
+  // Escape to close fullscreen
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullscreen(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isFullscreen]);
+
+  const DiagramContent = ({ large }: { large?: boolean }) => (
+    <div
+      ref={containerRef}
+      className={`relative overflow-hidden ${large ? "h-full" : "min-h-[200px] max-h-[500px]"}`}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      onWheel={handleWheel}
+      style={{ cursor: zoom > 1 ? (isDragging ? "grabbing" : "grab") : "default" }}
     >
-      <div className="rounded-2xl border border-gray-200 overflow-hidden shadow-sm bg-white">
-        {/* Header bar */}
-        <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-200">
-          <div className="flex items-center gap-2">
-            <div className="flex gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-red-400" />
-              <span className="w-3 h-3 rounded-full bg-amber-400" />
-              <span className="w-3 h-3 rounded-full bg-green-400" />
-            </div>
-            <span className="text-xs font-semibold text-gray-500 ml-2 tracking-wide">
-              mermaid.diagram
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            {isRendering && (
-              <span className="text-[10px] text-amber-600 font-medium flex items-center gap-1">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                rendering
-              </span>
-            )}
-            {!isRendering && svg && (
-              <span className="text-[10px] text-green-600 font-medium flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                rendered
-              </span>
-            )}
-            {!isRendering && error && (
-              <span className="text-[10px] text-red-500 font-medium flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-                error
-              </span>
-            )}
-          </div>
+      {svg ? (
+        <div
+          className="p-6 flex items-center justify-center transition-transform duration-150 ease-out"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transformOrigin: "center center",
+          }}
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      ) : error ? (
+        <div className="p-4">
+          <pre className="text-xs text-red-500 bg-red-50 border border-red-200 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
+            {error}
+          </pre>
         </div>
+      ) : (
+        <div className="flex items-center justify-center h-full min-h-[120px]">
+          <span className="text-xs text-gray-300 italic">
+            Type mermaid code to see diagram...
+          </span>
+        </div>
+      )}
+    </div>
+  );
 
-        {/* Split view: code left, preview right */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-gray-200">
-          {/* Code pane */}
-          <div className="bg-[#1e1e2e]">
-            <div className="px-3 py-1.5 border-b border-white/5">
-              <span className="text-[10px] font-mono text-gray-500 uppercase tracking-widest">
-                Code
-              </span>
-            </div>
-            <div className="p-4 min-h-[120px] max-h-[400px] overflow-auto">
-              <NodeViewContent
-                as="pre"
-                spellCheck={false}
-                className="text-[13px] font-mono text-[#cdd6f4] leading-relaxed outline-none whitespace-pre-wrap break-words min-h-[60px] caret-[#f5e0dc] m-0 bg-transparent"
-              />
-            </div>
-          </div>
+  const ViewToolbar = () => (
+    <div className="flex items-center gap-1">
+      {/* Code / Diagram toggle */}
+      <div className="flex bg-gray-100 rounded-md p-0.5">
+        <button
+          type="button"
+          onClick={() => setViewMode("diagram")}
+          className={`px-2 py-1 rounded text-xs font-medium transition-all flex items-center gap-1 ${
+            viewMode === "diagram"
+              ? "bg-white text-gray-800 shadow-sm"
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <Eye className="w-3 h-3" />
+          Preview
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewMode("code")}
+          className={`px-2 py-1 rounded text-xs font-medium transition-all flex items-center gap-1 ${
+            viewMode === "code"
+              ? "bg-white text-gray-800 shadow-sm"
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <Code className="w-3 h-3" />
+          Code
+        </button>
+      </div>
 
-          {/* Preview pane */}
-          <div className="bg-white">
-            <div className="px-3 py-1.5 border-b border-gray-100 bg-gray-50/50">
-              <span className="text-[10px] font-mono text-gray-400 uppercase tracking-widest">
-                Preview
+      <div className="w-px h-5 bg-gray-200 mx-1" />
+
+      {/* Zoom controls (only in diagram mode) */}
+      {viewMode === "diagram" && (
+        <>
+          <button
+            type="button"
+            onClick={handleZoomOut}
+            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 transition-colors"
+            title="Zoom out"
+          >
+            <ZoomOut className="w-3.5 h-3.5" />
+          </button>
+          <span className="text-[10px] font-mono text-gray-400 min-w-[32px] text-center select-none">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            onClick={handleZoomIn}
+            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 transition-colors"
+            title="Zoom in"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={handleReset}
+            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 transition-colors"
+            title="Reset view"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="w-px h-5 bg-gray-200 mx-1" />
+        </>
+      )}
+
+      {/* Fullscreen */}
+      <button
+        type="button"
+        onClick={() => setIsFullscreen(true)}
+        className="p-1.5 rounded hover:bg-gray-100 text-gray-500 transition-colors"
+        title="Fullscreen"
+      >
+        <Maximize2 className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+
+  return (
+    <>
+      <NodeViewWrapper
+        as="div"
+        className={`mermaid-node my-6 ${selected ? "ring-2 ring-purple-400 ring-offset-2 rounded-2xl" : ""}`}
+      >
+        <div className="rounded-2xl border border-gray-200 overflow-hidden shadow-sm bg-white group">
+          {/* Header with traffic lights + controls */}
+          <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-400" />
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                <span className="w-2.5 h-2.5 rounded-full bg-green-400" />
+              </div>
+              <span className="text-[11px] font-mono text-gray-400 ml-1">
+                mermaid.diagram
               </span>
-            </div>
-            <div className="p-6 min-h-[120px] flex items-center justify-center overflow-auto">
-              {svg ? (
-                <div
-                  className="[&_svg]:max-w-full [&_svg]:h-auto [&_svg]:max-h-[350px]"
-                  dangerouslySetInnerHTML={{ __html: svg }}
-                />
-              ) : error ? (
-                <div className="w-full">
-                  <pre className="text-xs text-red-500 bg-red-50 border border-red-200 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
-                    {error}
-                  </pre>
-                </div>
-              ) : (
-                <span className="text-xs text-gray-300 italic">
-                  Type mermaid code to see preview...
-                </span>
+              {isRendering && (
+                <Loader2 className="w-3 h-3 animate-spin text-amber-500 ml-1" />
+              )}
+              {!isRendering && svg && (
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 ml-1" />
               )}
             </div>
+            <ViewToolbar />
+          </div>
+
+          {/* Content */}
+          {viewMode === "diagram" ? (
+            <DiagramContent />
+          ) : (
+            <div className="bg-[#1e1e2e]">
+              <div className="p-4 min-h-[120px] max-h-[400px] overflow-auto">
+                <NodeViewContent
+                  as="pre"
+                  spellCheck={false}
+                  className="text-[13px] font-mono text-[#cdd6f4] leading-relaxed outline-none whitespace-pre-wrap break-words min-h-[60px] caret-[#f5e0dc] m-0 bg-transparent"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </NodeViewWrapper>
+
+      {/* Fullscreen Modal */}
+      {isFullscreen && (
+        <div className="fixed inset-0 z-[9999] bg-black/90 backdrop-blur-sm flex flex-col animate-fade-in">
+          {/* Fullscreen header */}
+          <div className="flex items-center justify-between px-4 py-3 bg-black/50 border-b border-white/10">
+            <div className="flex items-center gap-3">
+              <div className="flex gap-1.5">
+                <span className="w-3 h-3 rounded-full bg-red-400" />
+                <span className="w-3 h-3 rounded-full bg-amber-400" />
+                <span className="w-3 h-3 rounded-full bg-green-400" />
+              </div>
+              <span className="text-sm font-mono text-gray-300">
+                mermaid.diagram
+              </span>
+              {isRendering && (
+                <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              {/* Code / Diagram toggle */}
+              <div className="flex bg-white/10 rounded-md p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("diagram")}
+                  className={`px-3 py-1.5 rounded text-xs font-medium transition-all flex items-center gap-1.5 ${
+                    viewMode === "diagram"
+                      ? "bg-white/20 text-white"
+                      : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("code")}
+                  className={`px-3 py-1.5 rounded text-xs font-medium transition-all flex items-center gap-1.5 ${
+                    viewMode === "code"
+                      ? "bg-white/20 text-white"
+                      : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  <Code className="w-3.5 h-3.5" />
+                  Code
+                </button>
+              </div>
+
+              <div className="w-px h-6 bg-white/10 mx-1" />
+
+              {/* Zoom controls */}
+              {viewMode === "diagram" && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleZoomOut}
+                    className="p-2 rounded-lg hover:bg-white/10 text-gray-300 transition-colors"
+                  >
+                    <ZoomOut className="w-4 h-4" />
+                  </button>
+                  <span className="text-xs font-mono text-gray-400 min-w-[40px] text-center">
+                    {Math.round(zoom * 100)}%
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleZoomIn}
+                    className="p-2 rounded-lg hover:bg-white/10 text-gray-300 transition-colors"
+                  >
+                    <ZoomIn className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleReset}
+                    className="p-2 rounded-lg hover:bg-white/10 text-gray-300 transition-colors"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+
+                  <div className="w-px h-6 bg-white/10 mx-1" />
+                </>
+              )}
+
+              {/* Close */}
+              <button
+                type="button"
+                onClick={() => setIsFullscreen(false)}
+                className="p-2 rounded-lg hover:bg-white/10 text-gray-300 transition-colors"
+              >
+                <Minimize2 className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Fullscreen content */}
+          <div className="flex-1 overflow-hidden">
+            {viewMode === "diagram" ? (
+              <DiagramContent large />
+            ) : (
+              <div className="h-full bg-[#1e1e2e] overflow-auto p-6">
+                <pre className="text-sm font-mono text-[#cdd6f4] leading-relaxed whitespace-pre-wrap break-words max-w-4xl mx-auto">
+                  {code}
+                </pre>
+              </div>
+            )}
+          </div>
+
+          {/* Fullscreen footer */}
+          <div className="px-4 py-2 bg-black/50 border-t border-white/10 text-[11px] text-gray-500 flex items-center gap-4">
+            <span>
+              <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-gray-400 font-mono text-[10px]">
+                Esc
+              </kbd>{" "}
+              to close
+            </span>
+            <span>
+              <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-gray-400 font-mono text-[10px]">
+                Ctrl
+              </kbd>{" "}
+              + scroll to zoom
+            </span>
+            {zoom > 1 && (
+              <span className="flex items-center gap-1">
+                <Grip className="w-3 h-3" /> Drag to pan
+              </span>
+            )}
           </div>
         </div>
-      </div>
-    </NodeViewWrapper>
+      )}
+    </>
   );
 }
 
@@ -307,7 +587,6 @@ export default function TaskEditor({
   const [showDiagramMenu, setShowDiagramMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Close diagram menu on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -318,7 +597,6 @@ export default function TaskEditor({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Tiptap Editor Setup
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -348,17 +626,14 @@ export default function TaskEditor({
     immediatelyRender: false,
   });
 
-  // Handle content change (for parent sync)
   const handleContentChange = useCallback((newContent: object) => {
     setContent(newContent);
     contentRef.current = newContent;
     setHasChanges(true);
   }, []);
 
-  // Save documentation
   const handleSave = useCallback(async () => {
     if (isSaving) return;
-
     setIsSaving(true);
     try {
       const result = await saveDocumentationAction(
@@ -366,7 +641,6 @@ export default function TaskEditor({
         contentRef.current,
         null
       );
-
       if (!result.error) {
         setLastSaved(new Date());
         setHasChanges(false);
@@ -382,7 +656,6 @@ export default function TaskEditor({
     }
   }, [taskId, isSaving]);
 
-  // Insert Mermaid Diagram (with optional template)
   const insertMermaidDiagram = useCallback(
     (templateCode?: string) => {
       if (!editor) return;
@@ -406,16 +679,12 @@ export default function TaskEditor({
     [editor]
   );
 
-  // Auto-save
   useEffect(() => {
     if (!hasChanges || isSaving) return;
-    const timer = setTimeout(() => {
-      handleSave();
-    }, 30000);
+    const timer = setTimeout(() => { handleSave(); }, 30000);
     return () => clearTimeout(timer);
   }, [hasChanges, isSaving, handleSave]);
 
-  // Keyboard shortcut: Ctrl/Cmd + S and Ctrl/Cmd + M
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
@@ -431,7 +700,6 @@ export default function TaskEditor({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleSave, insertMermaidDiagram]);
 
-  // Before unload warning
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (hasChanges && !isSaving) {
@@ -443,7 +711,6 @@ export default function TaskEditor({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [hasChanges, isSaving]);
 
-  // Sync external content changes
   useEffect(() => {
     if (editor && initialContent && Object.keys(initialContent).length > 0) {
       const current = editor.getJSON();
@@ -453,7 +720,6 @@ export default function TaskEditor({
     }
   }, [editor, initialContent]);
 
-  // Toolbar button component
   const ToolbarButton = ({
     onClick,
     isActive,
@@ -729,7 +995,7 @@ export default function TaskEditor({
         </div>
       </div>
 
-      {/* Footer Status */}
+      {/* Footer */}
       <footer className="border-t border-gray-100 bg-white/80 backdrop-blur-sm px-4 py-2 text-xs text-gray-400 flex items-center justify-between">
         <span>
           {hasChanges ? "● Unsaved changes" : "✓ All changes saved"}
@@ -791,13 +1057,11 @@ export default function TaskEditor({
         .notion-prose > *:first-child {
           margin-top: 0;
         }
-
         .notion-prose p {
           margin: 0.25em 0;
           line-height: 1.75;
           color: #374151;
         }
-
         .notion-prose p.is-editor-empty:first-child::before {
           color: #9ca3af;
           content: attr(data-placeholder);
@@ -805,7 +1069,6 @@ export default function TaskEditor({
           height: 0;
           pointer-events: none;
         }
-
         .notion-prose h1 {
           font-size: 1.875rem;
           font-weight: 700;
@@ -813,7 +1076,6 @@ export default function TaskEditor({
           color: #111827;
           line-height: 1.3;
         }
-
         .notion-prose h2 {
           font-size: 1.5rem;
           font-weight: 600;
@@ -821,7 +1083,6 @@ export default function TaskEditor({
           color: #111827;
           line-height: 1.4;
         }
-
         .notion-prose h3 {
           font-size: 1.25rem;
           font-weight: 600;
@@ -829,23 +1090,19 @@ export default function TaskEditor({
           color: #111827;
           line-height: 1.5;
         }
-
         .notion-prose ul,
         .notion-prose ol {
           margin: 0.5em 0;
           padding-left: 1.5em;
         }
-
         .notion-prose li {
           margin: 0.25em 0;
           padding-left: 0.25em;
         }
-
         .notion-prose li > p {
           margin: 0;
           display: inline;
         }
-
         .notion-prose blockquote {
           margin: 1em 0;
           padding: 0.25em 0 0.25em 1em;
@@ -853,7 +1110,6 @@ export default function TaskEditor({
           color: #4b5563;
           font-style: normal;
         }
-
         .notion-prose code {
           background: #f3f4f6;
           color: #111827;
@@ -863,7 +1119,6 @@ export default function TaskEditor({
           font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
             monospace;
         }
-
         .notion-prose pre {
           margin: 1em 0;
           background: #1f2937;
@@ -871,34 +1126,28 @@ export default function TaskEditor({
           padding: 1em;
           overflow-x: auto;
         }
-
         .notion-prose pre code {
           background: transparent;
           color: #e5e7eb;
           padding: 0;
           font-size: 0.875em;
         }
-
         .notion-prose hr {
           margin: 2em 0;
           border: none;
           border-top: 1px solid #e5e7eb;
         }
-
         .notion-prose a {
           color: #2563eb;
           text-decoration: none;
           font-weight: 500;
         }
-
         .notion-prose a:hover {
           text-decoration: underline;
         }
-
         .ProseMirror-focused {
           outline: none;
         }
-
         .ProseMirror-selectednode {
           outline: 2px solid #3b82f6;
           outline-offset: 2px;

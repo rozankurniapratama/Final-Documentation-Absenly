@@ -10,7 +10,7 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
 import { createLowlight, all } from "lowlight";
-import { CodeblockLowlightMermaid } from "tiptap-extension-mermaid";
+import { CodeBlockLowlightMermaid } from "tiptap-extension-mermaid";
 import mermaid from "mermaid";
 
 // Initialize Mermaid globally
@@ -55,7 +55,7 @@ export default function TaskEditor({
         placeholder: "Type '/' for commands, or start writing...",
       }),
       // Mermaid-enabled Code Block
-      CodeblockLowlightMermaid.configure({
+      CodeBlockLowlightMermaid.configure({
         lowlight,
         classList: "mermaid-container",
         debounce: 300,

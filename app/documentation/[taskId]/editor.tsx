@@ -20,8 +20,6 @@ import {
   RotateCcw,
   Code,
   Eye,
-  X,
-  Grip,
 } from "lucide-react";
 import { saveDocumentationAction } from "../actions";
 import {
@@ -29,7 +27,6 @@ import {
   EditorContent,
   ReactNodeViewRenderer,
   NodeViewWrapper,
-  NodeViewContent,
 } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -93,25 +90,35 @@ const DIAGRAM_TEMPLATES = [
 ];
 
 /* ────────────────────────────────────────────
-   Mermaid React NodeView
+   Mermaid Block — attribute-based, no NodeViewContent
    ──────────────────────────────────────────── */
 
-function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
+function MermaidBlock({
+  node,
+  updateAttributes,
+  selected,
+}: {
+  node: any;
+  updateAttributes: (attrs: Record<string, any>) => void;
+  selected: boolean;
+}) {
+  const [localCode, setLocalCode] = useState(node.attrs.code || "");
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
   const [isRendering, setIsRendering] = useState(false);
+  const [mermaidReady, setMermaidReady] = useState(false);
   const [viewMode, setViewMode] = useState<"diagram" | "code">("diagram");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
-  const dragStart = useRef({ x: 0, y: 0 });
-  const panStart = useRef({ x: 0, y: 0 });
-  const containerRef = useRef<HTMLDivElement>(null);
-  const counter = useRef(0);
-  const mermaidRef = useRef<any>(null);
-  const code = node.textContent;
 
+  const mermaidRef = useRef<any>(null);
+  const counterRef = useRef(0);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const panStartRef = useRef({ x: 0, y: 0 });
+
+  // Load mermaid once
   useEffect(() => {
     if (typeof window === "undefined") return;
     import("mermaid").then((m) => {
@@ -120,29 +127,46 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
         startOnLoad: false,
         theme: "neutral",
         securityLevel: "loose",
-        fontFamily:
-          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       });
+      setMermaidReady(true);
     });
   }, []);
 
+  // Sync from node attributes (handles undo/redo)
   useEffect(() => {
-    if (!code.trim() || !mermaidRef.current) {
+    setLocalCode(node.attrs.code || "");
+  }, [node.attrs.code]);
+
+  // Handle textarea change → update TipTap node attribute
+  const handleCodeChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const newCode = e.target.value;
+      setLocalCode(newCode);
+      updateAttributes({ code: newCode });
+    },
+    [updateAttributes]
+  );
+
+  // Render mermaid from code (debounced)
+  useEffect(() => {
+    if (!mermaidReady || !localCode.trim()) {
       setSvg("");
       setError("");
+      setIsRendering(false);
       return;
     }
 
     let cancelled = false;
-    counter.current += 1;
-    const id = `mmd-${counter.current}`;
+    counterRef.current += 1;
+    const renderId = `mmd-${Date.now()}-${counterRef.current}`;
+
+    setIsRendering(true);
 
     const timeout = setTimeout(async () => {
-      setIsRendering(true);
       try {
         const { svg: result } = await mermaidRef.current.render(
-          id,
-          code.trim()
+          renderId,
+          localCode.trim()
         );
         if (!cancelled) {
           setSvg(result);
@@ -150,39 +174,31 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
         }
       } catch (e: any) {
         if (!cancelled) {
-          setError(e?.shortMessage || e?.message || "Syntax error");
+          setError(e?.message || "Syntax error");
           setSvg("");
         }
       } finally {
         if (!cancelled) setIsRendering(false);
       }
-    }, 400);
+    }, 500);
 
     return () => {
       cancelled = true;
       clearTimeout(timeout);
     };
-  }, [code]);
+  }, [localCode, mermaidReady]);
 
-  const handleZoomIn = useCallback(() => {
-    setZoom((z) => Math.min(z + 0.25, 3));
-  }, []);
-
-  const handleZoomOut = useCallback(() => {
-    setZoom((z) => Math.max(z - 0.25, 0.25));
-  }, []);
-
-  const handleReset = useCallback(() => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-  }, []);
+  // Zoom / Pan handlers
+  const handleZoomIn = useCallback(() => setZoom((z) => Math.min(z + 0.25, 3)), []);
+  const handleZoomOut = useCallback(() => setZoom((z) => Math.max(z - 0.25, 0.25)), []);
+  const handleReset = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, []);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (zoom <= 1) return;
       setIsDragging(true);
-      dragStart.current = { x: e.clientX, y: e.clientY };
-      panStart.current = { ...pan };
+      dragStartRef.current = { x: e.clientX, y: e.clientY };
+      panStartRef.current = { ...pan };
       e.preventDefault();
     },
     [zoom, pan]
@@ -191,27 +207,20 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
       if (!isDragging) return;
-      const dx = e.clientX - dragStart.current.x;
-      const dy = e.clientY - dragStart.current.y;
       setPan({
-        x: panStart.current.x + dx,
-        y: panStart.current.y + dy,
+        x: panStartRef.current.x + (e.clientX - dragStartRef.current.x),
+        y: panStartRef.current.y + (e.clientY - dragStartRef.current.y),
       });
     },
     [isDragging]
   );
 
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
+  const handleMouseUp = useCallback(() => setIsDragging(false), []);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
-      setZoom((z) => {
-        const delta = e.deltaY > 0 ? -0.1 : 0.1;
-        return Math.min(Math.max(z + delta, 0.25), 3);
-      });
+      setZoom((z) => Math.min(Math.max(z + (e.deltaY > 0 ? -0.1 : 0.1), 0.25), 3));
     }
   }, []);
 
@@ -225,20 +234,23 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
     return () => window.removeEventListener("keydown", handler);
   }, [isFullscreen]);
 
-  const DiagramContent = ({ large }: { large?: boolean }) => (
+  /* ── Reusable sub-components ── */
+
+  const DiagramPreview = ({ large }: { large?: boolean }) => (
     <div
-      ref={containerRef}
-      className={`relative overflow-hidden ${large ? "h-full" : "min-h-[200px] max-h-[500px]"}`}
+      className={`relative overflow-hidden bg-white ${large ? "h-full" : "min-h-[200px] max-h-[500px]"}`}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
       onWheel={handleWheel}
-      style={{ cursor: zoom > 1 ? (isDragging ? "grabbing" : "grab") : "default" }}
+      style={{
+        cursor: zoom > 1 ? (isDragging ? "grabbing" : "grab") : "default",
+      }}
     >
       {svg ? (
         <div
-          className="p-6 flex items-center justify-center transition-transform duration-150 ease-out"
+          className="p-6 flex items-center justify-center transition-transform duration-150"
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
             transformOrigin: "center center",
@@ -261,18 +273,32 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
     </div>
   );
 
-  const ViewToolbar = () => (
+  const CodeEditor = () => (
+    <div className="bg-[#1e1e2e]">
+      <textarea
+        value={localCode}
+        onChange={handleCodeChange}
+        spellCheck={false}
+        className="w-full p-4 min-h-[200px] max-h-[400px] bg-transparent text-[13px] font-mono text-[#cdd6f4] leading-relaxed outline-none resize-y whitespace-pre"
+        placeholder="Type mermaid syntax here..."
+      />
+    </div>
+  );
+
+  const ViewToolbar = ({ dark }: { dark?: boolean }) => (
     <div className="flex items-center gap-1">
-      {/* Code / Diagram toggle */}
-      <div className="flex bg-gray-100 rounded-md p-0.5">
+      <div className={`flex rounded-md p-0.5 ${dark ? "bg-white/10" : "bg-gray-100"}`}>
         <button
           type="button"
           onClick={() => setViewMode("diagram")}
-          className={`px-2 py-1 rounded text-xs font-medium transition-all flex items-center gap-1 ${
-            viewMode === "diagram"
-              ? "bg-white text-gray-800 shadow-sm"
-              : "text-gray-500 hover:text-gray-700"
-          }`}
+          className={`px-2 py-1 rounded text-xs font-medium transition-all flex items-center gap-1 ${viewMode === "diagram"
+              ? dark
+                ? "bg-white/20 text-white"
+                : "bg-white text-gray-800 shadow-sm"
+              : dark
+                ? "text-gray-400 hover:text-white"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
         >
           <Eye className="w-3 h-3" />
           Preview
@@ -280,65 +306,62 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
         <button
           type="button"
           onClick={() => setViewMode("code")}
-          className={`px-2 py-1 rounded text-xs font-medium transition-all flex items-center gap-1 ${
-            viewMode === "code"
-              ? "bg-white text-gray-800 shadow-sm"
-              : "text-gray-500 hover:text-gray-700"
-          }`}
+          className={`px-2 py-1 rounded text-xs font-medium transition-all flex items-center gap-1 ${viewMode === "code"
+              ? dark
+                ? "bg-white/20 text-white"
+                : "bg-white text-gray-800 shadow-sm"
+              : dark
+                ? "text-gray-400 hover:text-white"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
         >
           <Code className="w-3 h-3" />
           Code
         </button>
       </div>
 
-      <div className="w-px h-5 bg-gray-200 mx-1" />
-
-      {/* Zoom controls (only in diagram mode) */}
       {viewMode === "diagram" && (
         <>
+          <div className={`w-px h-5 mx-1 ${dark ? "bg-white/10" : "bg-gray-200"}`} />
           <button
             type="button"
             onClick={handleZoomOut}
-            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 transition-colors"
-            title="Zoom out"
+            className={`p-1.5 rounded transition-colors ${dark ? "hover:bg-white/10 text-gray-300" : "hover:bg-gray-100 text-gray-500"}`}
           >
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
-          <span className="text-[10px] font-mono text-gray-400 min-w-[32px] text-center select-none">
+          <span className={`text-[10px] font-mono min-w-[32px] text-center select-none ${dark ? "text-gray-400" : "text-gray-400"}`}>
             {Math.round(zoom * 100)}%
           </span>
           <button
             type="button"
             onClick={handleZoomIn}
-            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 transition-colors"
-            title="Zoom in"
+            className={`p-1.5 rounded transition-colors ${dark ? "hover:bg-white/10 text-gray-300" : "hover:bg-gray-100 text-gray-500"}`}
           >
             <ZoomIn className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
             onClick={handleReset}
-            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 transition-colors"
-            title="Reset view"
+            className={`p-1.5 rounded transition-colors ${dark ? "hover:bg-white/10 text-gray-300" : "hover:bg-gray-100 text-gray-500"}`}
           >
             <RotateCcw className="w-3.5 h-3.5" />
           </button>
-
-          <div className="w-px h-5 bg-gray-200 mx-1" />
         </>
       )}
 
-      {/* Fullscreen */}
+      <div className={`w-px h-5 mx-1 ${dark ? "bg-white/10" : "bg-gray-200"}`} />
       <button
         type="button"
         onClick={() => setIsFullscreen(true)}
-        className="p-1.5 rounded hover:bg-gray-100 text-gray-500 transition-colors"
-        title="Fullscreen"
+        className={`p-1.5 rounded transition-colors ${dark ? "hover:bg-white/10 text-gray-300" : "hover:bg-gray-100 text-gray-500"}`}
       >
         <Maximize2 className="w-3.5 h-3.5" />
       </button>
     </div>
   );
+
+  /* ── Main render ── */
 
   return (
     <>
@@ -347,7 +370,7 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
         className={`mermaid-node my-6 ${selected ? "ring-2 ring-purple-400 ring-offset-2 rounded-2xl" : ""}`}
       >
         <div className="rounded-2xl border border-gray-200 overflow-hidden shadow-sm bg-white group">
-          {/* Header with traffic lights + controls */}
+          {/* Header */}
           <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
             <div className="flex items-center gap-2">
               <div className="flex gap-1.5">
@@ -358,37 +381,20 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
               <span className="text-[11px] font-mono text-gray-400 ml-1">
                 mermaid.diagram
               </span>
-              {isRendering && (
-                <Loader2 className="w-3 h-3 animate-spin text-amber-500 ml-1" />
-              )}
-              {!isRendering && svg && (
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 ml-1" />
-              )}
+              {isRendering && <Loader2 className="w-3 h-3 animate-spin text-amber-500 ml-1" />}
+              {!isRendering && svg && <span className="w-1.5 h-1.5 rounded-full bg-green-500 ml-1" />}
             </div>
             <ViewToolbar />
           </div>
 
-          {/* Content */}
-          {viewMode === "diagram" ? (
-            <DiagramContent />
-          ) : (
-            <div className="bg-[#1e1e2e]">
-              <div className="p-4 min-h-[120px] max-h-[400px] overflow-auto">
-                <NodeViewContent
-                  as="pre"
-                  spellCheck={false}
-                  className="text-[13px] font-mono text-[#cdd6f4] leading-relaxed outline-none whitespace-pre-wrap break-words min-h-[60px] caret-[#f5e0dc] m-0 bg-transparent"
-                />
-              </div>
-            </div>
-          )}
+          {/* Body */}
+          {viewMode === "diagram" ? <DiagramPreview /> : <CodeEditor />}
         </div>
       </NodeViewWrapper>
 
-      {/* Fullscreen Modal */}
+      {/* Fullscreen modal */}
       {isFullscreen && (
         <div className="fixed inset-0 z-[9999] bg-black/90 backdrop-blur-sm flex flex-col animate-fade-in">
-          {/* Fullscreen header */}
           <div className="flex items-center justify-between px-4 py-3 bg-black/50 border-b border-white/10">
             <div className="flex items-center gap-3">
               <div className="flex gap-1.5">
@@ -396,78 +402,12 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
                 <span className="w-3 h-3 rounded-full bg-amber-400" />
                 <span className="w-3 h-3 rounded-full bg-green-400" />
               </div>
-              <span className="text-sm font-mono text-gray-300">
-                mermaid.diagram
-              </span>
-              {isRendering && (
-                <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
-              )}
+              <span className="text-sm font-mono text-gray-300">mermaid.diagram</span>
+              {isRendering && <Loader2 className="w-4 h-4 animate-spin text-amber-400" />}
             </div>
-
             <div className="flex items-center gap-2">
-              {/* Code / Diagram toggle */}
-              <div className="flex bg-white/10 rounded-md p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setViewMode("diagram")}
-                  className={`px-3 py-1.5 rounded text-xs font-medium transition-all flex items-center gap-1.5 ${
-                    viewMode === "diagram"
-                      ? "bg-white/20 text-white"
-                      : "text-gray-400 hover:text-white"
-                  }`}
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  Preview
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode("code")}
-                  className={`px-3 py-1.5 rounded text-xs font-medium transition-all flex items-center gap-1.5 ${
-                    viewMode === "code"
-                      ? "bg-white/20 text-white"
-                      : "text-gray-400 hover:text-white"
-                  }`}
-                >
-                  <Code className="w-3.5 h-3.5" />
-                  Code
-                </button>
-              </div>
-
+              <ViewToolbar dark />
               <div className="w-px h-6 bg-white/10 mx-1" />
-
-              {/* Zoom controls */}
-              {viewMode === "diagram" && (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleZoomOut}
-                    className="p-2 rounded-lg hover:bg-white/10 text-gray-300 transition-colors"
-                  >
-                    <ZoomOut className="w-4 h-4" />
-                  </button>
-                  <span className="text-xs font-mono text-gray-400 min-w-[40px] text-center">
-                    {Math.round(zoom * 100)}%
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleZoomIn}
-                    className="p-2 rounded-lg hover:bg-white/10 text-gray-300 transition-colors"
-                  >
-                    <ZoomIn className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleReset}
-                    className="p-2 rounded-lg hover:bg-white/10 text-gray-300 transition-colors"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                  </button>
-
-                  <div className="w-px h-6 bg-white/10 mx-1" />
-                </>
-              )}
-
-              {/* Close */}
               <button
                 type="button"
                 onClick={() => setIsFullscreen(false)}
@@ -478,38 +418,25 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
             </div>
           </div>
 
-          {/* Fullscreen content */}
           <div className="flex-1 overflow-hidden">
             {viewMode === "diagram" ? (
-              <DiagramContent large />
+              <DiagramPreview large />
             ) : (
               <div className="h-full bg-[#1e1e2e] overflow-auto p-6">
-                <pre className="text-sm font-mono text-[#cdd6f4] leading-relaxed whitespace-pre-wrap break-words max-w-4xl mx-auto">
-                  {code}
-                </pre>
+                <textarea
+                  value={localCode}
+                  onChange={handleCodeChange}
+                  spellCheck={false}
+                  className="w-full h-full max-w-4xl mx-auto block bg-transparent text-sm font-mono text-[#cdd6f4] leading-relaxed outline-none resize-none whitespace-pre"
+                />
               </div>
             )}
           </div>
 
-          {/* Fullscreen footer */}
           <div className="px-4 py-2 bg-black/50 border-t border-white/10 text-[11px] text-gray-500 flex items-center gap-4">
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-gray-400 font-mono text-[10px]">
-                Esc
-              </kbd>{" "}
-              to close
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-gray-400 font-mono text-[10px]">
-                Ctrl
-              </kbd>{" "}
-              + scroll to zoom
-            </span>
-            {zoom > 1 && (
-              <span className="flex items-center gap-1">
-                <Grip className="w-3 h-3" /> Drag to pan
-              </span>
-            )}
+            <span><kbd className="px-1.5 py-0.5 bg-white/10 rounded text-gray-400 font-mono text-[10px]">Esc</kbd> close</span>
+            <span><kbd className="px-1.5 py-0.5 bg-white/10 rounded text-gray-400 font-mono text-[10px]">Ctrl</kbd> + scroll zoom</span>
+            {zoom > 1 && <span>Drag to pan</span>}
           </div>
         </div>
       )}
@@ -518,7 +445,7 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
 }
 
 /* ────────────────────────────────────────────
-   Create Mermaid Extension at runtime
+   Mermaid Extension — attribute-based, leaf node
    ──────────────────────────────────────────── */
 
 let _mermaidExt: any = null;
@@ -532,10 +459,20 @@ function getMermaidExtension() {
   _mermaidExt = core.Node.create({
     name: "mermaidDiagram",
     group: "block",
-    content: "text*",
-    marks: "",
-    code: true,
-    defining: true,
+
+    // Leaf node — no child content, code stored as attribute
+    addAttributes() {
+      return {
+        code: {
+          default: "",
+          parseHTML: (element: HTMLElement) =>
+            element.getAttribute("data-mermaid-code") || "",
+          renderHTML: (attributes: any) => ({
+            "data-mermaid-code": attributes.code,
+          }),
+        },
+      };
+    },
 
     parseHTML() {
       return [{ tag: 'div[data-type="mermaid-diagram"]' }];
@@ -547,7 +484,6 @@ function getMermaidExtension() {
         core.mergeAttributes(HTMLAttributes, {
           "data-type": "mermaid-diagram",
         }),
-        0,
       ];
     },
 
@@ -656,6 +592,7 @@ export default function TaskEditor({
     }
   }, [taskId, isSaving]);
 
+  // Insert mermaid diagram — code goes into attrs, not content
   const insertMermaidDiagram = useCallback(
     (templateCode?: string) => {
       if (!editor) return;
@@ -671,7 +608,7 @@ export default function TaskEditor({
         .focus()
         .insertContent({
           type: "mermaidDiagram",
-          content: [{ type: "text", text: code }],
+          attrs: { code },
         })
         .run();
       setShowDiagramMenu(false);
@@ -735,11 +672,10 @@ export default function TaskEditor({
       type="button"
       onClick={onClick}
       title={title}
-      className={`p-2 rounded transition-colors ${
-        isActive
+      className={`p-2 rounded transition-colors ${isActive
           ? "bg-gray-200 text-gray-900"
           : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-      }`}
+        }`}
     >
       {children}
     </button>
@@ -800,11 +736,10 @@ export default function TaskEditor({
           <button
             onClick={handleSave}
             disabled={isSaving || !hasChanges}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
-              isSaving || !hasChanges
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${isSaving || !hasChanges
                 ? "bg-gray-100 text-gray-400 cursor-not-allowed"
                 : "bg-black text-white hover:bg-gray-800 active:scale-[0.98]"
-            }`}
+              }`}
           >
             {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -821,7 +756,6 @@ export default function TaskEditor({
       {/* Editor Area */}
       <div className="flex-1 overflow-auto">
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
-          {/* Title */}
           <div className="mb-6 pb-4 border-b border-gray-100">
             <input
               type="text"
@@ -839,98 +773,22 @@ export default function TaskEditor({
 
           {/* Toolbar */}
           <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border border-gray-200 rounded-lg p-1.5 mb-4 flex flex-wrap gap-1 shadow-sm">
-            <ToolbarButton
-              onClick={() =>
-                editor.chain().focus().toggleHeading({ level: 1 }).run()
-              }
-              isActive={editor.isActive("heading", { level: 1 })}
-              title="Heading 1"
-            >
-              <span className="text-sm font-bold">H1</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() =>
-                editor.chain().focus().toggleHeading({ level: 2 }).run()
-              }
-              isActive={editor.isActive("heading", { level: 2 })}
-              title="Heading 2"
-            >
-              <span className="text-sm font-bold">H2</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() =>
-                editor.chain().focus().toggleHeading({ level: 3 }).run()
-              }
-              isActive={editor.isActive("heading", { level: 3 })}
-              title="Heading 3"
-            >
-              <span className="text-sm font-bold">H3</span>
-            </ToolbarButton>
-
+            <ToolbarButton onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} isActive={editor.isActive("heading", { level: 1 })} title="Heading 1"><span className="text-sm font-bold">H1</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} isActive={editor.isActive("heading", { level: 2 })} title="Heading 2"><span className="text-sm font-bold">H2</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} isActive={editor.isActive("heading", { level: 3 })} title="Heading 3"><span className="text-sm font-bold">H3</span></ToolbarButton>
+            <div className="w-px bg-gray-200 mx-1" />
+            <ToolbarButton onClick={() => editor.chain().focus().toggleBold().run()} isActive={editor.isActive("bold")} title="Bold (Ctrl+B)"><span className="font-bold">B</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleItalic().run()} isActive={editor.isActive("italic")} title="Italic (Ctrl+I)"><span className="italic">I</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleStrike().run()} isActive={editor.isActive("strike")} title="Strikethrough"><span className="line-through">S</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleCode().run()} isActive={editor.isActive("code")} title="Code"><span className="font-mono text-xs">{`</>`}</span></ToolbarButton>
+            <div className="w-px bg-gray-200 mx-1" />
+            <ToolbarButton onClick={() => editor.chain().focus().toggleBulletList().run()} isActive={editor.isActive("bulletList")} title="Bullet List"><span className="text-sm">•</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleOrderedList().run()} isActive={editor.isActive("orderedList")} title="Numbered List"><span className="text-sm">1.</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleBlockquote().run()} isActive={editor.isActive("blockquote")} title="Quote"><span className="text-lg leading-none">&ldquo;</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().setHorizontalRule().run()} title="Divider"><span className="text-sm">—</span></ToolbarButton>
             <div className="w-px bg-gray-200 mx-1" />
 
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleBold().run()}
-              isActive={editor.isActive("bold")}
-              title="Bold (Ctrl+B)"
-            >
-              <span className="font-bold">B</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleItalic().run()}
-              isActive={editor.isActive("italic")}
-              title="Italic (Ctrl+I)"
-            >
-              <span className="italic">I</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleStrike().run()}
-              isActive={editor.isActive("strike")}
-              title="Strikethrough"
-            >
-              <span className="line-through">S</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleCode().run()}
-              isActive={editor.isActive("code")}
-              title="Code"
-            >
-              <span className="font-mono text-xs">{`</>`}</span>
-            </ToolbarButton>
-
-            <div className="w-px bg-gray-200 mx-1" />
-
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleBulletList().run()}
-              isActive={editor.isActive("bulletList")}
-              title="Bullet List"
-            >
-              <span className="text-sm">•</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleOrderedList().run()}
-              isActive={editor.isActive("orderedList")}
-              title="Numbered List"
-            >
-              <span className="text-sm">1.</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleBlockquote().run()}
-              isActive={editor.isActive("blockquote")}
-              title="Quote"
-            >
-              <span className="text-lg leading-none">&ldquo;</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().setHorizontalRule().run()}
-              title="Divider"
-            >
-              <span className="text-sm">—</span>
-            </ToolbarButton>
-
-            <div className="w-px bg-gray-200 mx-1" />
-
-            {/* Mermaid Diagram with dropdown */}
+            {/* Mermaid dropdown */}
             <div className="relative" ref={menuRef}>
               <button
                 type="button"
@@ -941,30 +799,18 @@ export default function TaskEditor({
                 <Sparkles className="w-4 h-4 text-purple-500" />
                 <ChevronDown className="w-3 h-3" />
               </button>
-
               {showDiagramMenu && (
                 <div className="absolute top-full left-0 mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-50 animate-fade-in">
-                  <button
-                    type="button"
-                    onClick={() => insertMermaidDiagram()}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-purple-50 flex items-center gap-2 transition-colors"
-                  >
+                  <button type="button" onClick={() => insertMermaidDiagram()} className="w-full px-3 py-2 text-left text-sm hover:bg-purple-50 flex items-center gap-2 transition-colors">
                     <Sparkles className="w-4 h-4 text-purple-400" />
                     <span className="text-gray-700">Blank Diagram</span>
-                    <kbd className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded font-mono">
-                      Ctrl+M
-                    </kbd>
+                    <kbd className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded font-mono">Ctrl+M</kbd>
                   </button>
                   <div className="border-t border-gray-100 my-1" />
                   {DIAGRAM_TEMPLATES.map((tpl) => {
                     const Icon = tpl.icon;
                     return (
-                      <button
-                        key={tpl.label}
-                        type="button"
-                        onClick={() => insertMermaidDiagram(tpl.code)}
-                        className="w-full px-3 py-2 text-left text-sm hover:bg-purple-50 flex items-center gap-2 transition-colors"
-                      >
+                      <button key={tpl.label} type="button" onClick={() => insertMermaidDiagram(tpl.code)} className="w-full px-3 py-2 text-left text-sm hover:bg-purple-50 flex items-center gap-2 transition-colors">
                         <Icon className="w-4 h-4 text-gray-400" />
                         <span className="text-gray-700">{tpl.label}</span>
                       </button>
@@ -975,204 +821,53 @@ export default function TaskEditor({
             </div>
 
             <div className="w-px bg-gray-200 mx-1" />
-
-            <ToolbarButton
-              onClick={() => editor.chain().focus().undo().run()}
-              title="Undo (Ctrl+Z)"
-            >
-              ↩
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().redo().run()}
-              title="Redo (Ctrl+Y)"
-            >
-              ↪
-            </ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().undo().run()} title="Undo (Ctrl+Z)">↩</ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().redo().run()} title="Redo (Ctrl+Y)">↪</ToolbarButton>
           </div>
 
-          {/* Editor Content */}
           <EditorContent editor={editor} />
         </div>
       </div>
 
       {/* Footer */}
       <footer className="border-t border-gray-100 bg-white/80 backdrop-blur-sm px-4 py-2 text-xs text-gray-400 flex items-center justify-between">
-        <span>
-          {hasChanges ? "● Unsaved changes" : "✓ All changes saved"}
-        </span>
+        <span>{hasChanges ? "● Unsaved changes" : "✓ All changes saved"}</span>
         <span className="hidden sm:inline">
-          Press{" "}
-          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">
-            Ctrl
-          </kbd>{" "}
-          +{" "}
-          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">
-            S
-          </kbd>{" "}
-          to save ·{" "}
-          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">
-            Ctrl
-          </kbd>{" "}
-          +{" "}
-          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">
-            M
-          </kbd>{" "}
-          for diagram
+          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">S</kbd> to save · <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">M</kbd> for diagram
         </span>
       </footer>
 
       {/* Styles */}
       <style jsx global>{`
         @keyframes fade-in {
-          from {
-            opacity: 0;
-            transform: translateY(-4px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: translateY(0); }
         }
-        .animate-fade-in {
-          animation: fade-in 0.2s ease-out;
-        }
-        kbd {
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-            monospace;
-        }
+        .animate-fade-in { animation: fade-in 0.2s ease-out; }
+        kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 
-        .notion-prose {
-          --tw-prose-body: #374151;
-          --tw-prose-headings: #111827;
-          --tw-prose-bold: #111827;
-          --tw-prose-bullets: #6b7280;
-          --tw-prose-hr: #e5e7eb;
-          --tw-prose-quotes: #374151;
-          --tw-prose-quote-borders: #e5e7eb;
-          --tw-prose-code: #111827;
-          --tw-prose-pre-bg: #1f2937;
-          --tw-prose-pre-code: #e5e7eb;
-        }
+        .notion-prose { --tw-prose-body: #374151; --tw-prose-headings: #111827; --tw-prose-bold: #111827; --tw-prose-bullets: #6b7280; --tw-prose-hr: #e5e7eb; --tw-prose-quotes: #374151; --tw-prose-quote-borders: #e5e7eb; --tw-prose-code: #111827; --tw-prose-pre-bg: #1f2937; --tw-prose-pre-code: #e5e7eb; }
+        .notion-prose > *:first-child { margin-top: 0; }
+        .notion-prose p { margin: 0.25em 0; line-height: 1.75; color: #374151; }
+        .notion-prose p.is-editor-empty:first-child::before { color: #9ca3af; content: attr(data-placeholder); float: left; height: 0; pointer-events: none; }
+        .notion-prose h1 { font-size: 1.875rem; font-weight: 700; margin: 1.5em 0 0.5em; color: #111827; line-height: 1.3; }
+        .notion-prose h2 { font-size: 1.5rem; font-weight: 600; margin: 1.25em 0 0.5em; color: #111827; line-height: 1.4; }
+        .notion-prose h3 { font-size: 1.25rem; font-weight: 600; margin: 1em 0 0.5em; color: #111827; line-height: 1.5; }
+        .notion-prose ul, .notion-prose ol { margin: 0.5em 0; padding-left: 1.5em; }
+        .notion-prose li { margin: 0.25em 0; padding-left: 0.25em; }
+        .notion-prose li > p { margin: 0; display: inline; }
+        .notion-prose blockquote { margin: 1em 0; padding: 0.25em 0 0.25em 1em; border-left: 3px solid #e5e7eb; color: #4b5563; font-style: normal; }
+        .notion-prose code { background: #f3f4f6; color: #111827; padding: 0.2em 0.4em; border-radius: 0.25rem; font-size: 0.875em; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+        .notion-prose pre { margin: 1em 0; background: #1f2937; border-radius: 0.5rem; padding: 1em; overflow-x: auto; }
+        .notion-prose pre code { background: transparent; color: #e5e7eb; padding: 0; font-size: 0.875em; }
+        .notion-prose hr { margin: 2em 0; border: none; border-top: 1px solid #e5e7eb; }
+        .notion-prose a { color: #2563eb; text-decoration: none; font-weight: 500; }
+        .notion-prose a:hover { text-decoration: underline; }
+        .ProseMirror-focused { outline: none; }
+        .ProseMirror-selectednode { outline: 2px solid #3b82f6; outline-offset: 2px; border-radius: 0.25rem; }
 
-        .notion-prose > *:first-child {
-          margin-top: 0;
-        }
-        .notion-prose p {
-          margin: 0.25em 0;
-          line-height: 1.75;
-          color: #374151;
-        }
-        .notion-prose p.is-editor-empty:first-child::before {
-          color: #9ca3af;
-          content: attr(data-placeholder);
-          float: left;
-          height: 0;
-          pointer-events: none;
-        }
-        .notion-prose h1 {
-          font-size: 1.875rem;
-          font-weight: 700;
-          margin: 1.5em 0 0.5em;
-          color: #111827;
-          line-height: 1.3;
-        }
-        .notion-prose h2 {
-          font-size: 1.5rem;
-          font-weight: 600;
-          margin: 1.25em 0 0.5em;
-          color: #111827;
-          line-height: 1.4;
-        }
-        .notion-prose h3 {
-          font-size: 1.25rem;
-          font-weight: 600;
-          margin: 1em 0 0.5em;
-          color: #111827;
-          line-height: 1.5;
-        }
-        .notion-prose ul,
-        .notion-prose ol {
-          margin: 0.5em 0;
-          padding-left: 1.5em;
-        }
-        .notion-prose li {
-          margin: 0.25em 0;
-          padding-left: 0.25em;
-        }
-        .notion-prose li > p {
-          margin: 0;
-          display: inline;
-        }
-        .notion-prose blockquote {
-          margin: 1em 0;
-          padding: 0.25em 0 0.25em 1em;
-          border-left: 3px solid #e5e7eb;
-          color: #4b5563;
-          font-style: normal;
-        }
-        .notion-prose code {
-          background: #f3f4f6;
-          color: #111827;
-          padding: 0.2em 0.4em;
-          border-radius: 0.25rem;
-          font-size: 0.875em;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-            monospace;
-        }
-        .notion-prose pre {
-          margin: 1em 0;
-          background: #1f2937;
-          border-radius: 0.5rem;
-          padding: 1em;
-          overflow-x: auto;
-        }
-        .notion-prose pre code {
-          background: transparent;
-          color: #e5e7eb;
-          padding: 0;
-          font-size: 0.875em;
-        }
-        .notion-prose hr {
-          margin: 2em 0;
-          border: none;
-          border-top: 1px solid #e5e7eb;
-        }
-        .notion-prose a {
-          color: #2563eb;
-          text-decoration: none;
-          font-weight: 500;
-        }
-        .notion-prose a:hover {
-          text-decoration: underline;
-        }
-        .ProseMirror-focused {
-          outline: none;
-        }
-        .ProseMirror-selectednode {
-          outline: 2px solid #3b82f6;
-          outline-offset: 2px;
-          border-radius: 0.25rem;
-        }
-
-        /* ── Mermaid Node ── */
-        .mermaid-node pre {
-          margin: 0;
-          padding: 0;
-          background: transparent;
-          border-radius: 0;
-        }
-        .mermaid-node pre code {
-          background: transparent;
-          color: #cdd6f4;
-          padding: 0;
-          font-size: 0.8125rem;
-        }
-        .mermaid-node .ProseMirror-focused {
-          outline: none;
-        }
-        .mermaid-node .ProseMirror-selectednode {
-          outline: none;
-        }
+        .mermaid-node .ProseMirror-focused { outline: none; }
+        .mermaid-node .ProseMirror-selectednode { outline: none; }
       `}</style>
     </div>
   );

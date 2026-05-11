@@ -120,16 +120,16 @@ export default function DocumentationDashboard({
   ) => {
     e.stopPropagation();
     setUpdatingTasks((prev) => new Set(prev).add(taskId));
-    
+
     setModules((prev) =>
       prev.map((module) =>
         module.id === moduleId
           ? {
-              ...module,
-              tasks: module.tasks.map((task) =>
-                task.id === taskId ? { ...task, is_completed: !currentState } : task
-              ),
-            }
+            ...module,
+            tasks: module.tasks.map((task) =>
+              task.id === taskId ? { ...task, is_completed: !currentState } : task
+            ),
+          }
           : module
       )
     );
@@ -140,11 +140,11 @@ export default function DocumentationDashboard({
         prev.map((module) =>
           module.id === moduleId
             ? {
-                ...module,
-                tasks: module.tasks.map((task) =>
-                  task.id === taskId ? { ...task, is_completed: currentState } : task
-                ),
-              }
+              ...module,
+              tasks: module.tasks.map((task) =>
+                task.id === taskId ? { ...task, is_completed: currentState } : task
+              ),
+            }
             : module
         )
       );
@@ -180,17 +180,17 @@ export default function DocumentationDashboard({
   const handleEditTaskSave = async (taskId: string, moduleId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!editTaskValue.trim()) return;
-    
+
     setUpdatingTasks((prev) => new Set(prev).add(taskId));
     setModules((prev) =>
       prev.map((module) =>
         module.id === moduleId
           ? {
-              ...module,
-              tasks: module.tasks.map((task) =>
-                task.id === taskId ? { ...task, name: editTaskValue.trim() } : task
-              ),
-            }
+            ...module,
+            tasks: module.tasks.map((task) =>
+              task.id === taskId ? { ...task, name: editTaskValue.trim() } : task
+            ),
+          }
           : module
       )
     );
@@ -201,11 +201,11 @@ export default function DocumentationDashboard({
         prev.map((module) =>
           module.id === moduleId
             ? {
-                ...module,
-                tasks: module.tasks.map((task) =>
-                  task.id === taskId ? { ...task, name: editTaskValue } : task
-                ),
-              }
+              ...module,
+              tasks: module.tasks.map((task) =>
+                task.id === taskId ? { ...task, name: editTaskValue } : task
+              ),
+            }
             : module
         )
       );
@@ -232,10 +232,10 @@ export default function DocumentationDashboard({
   const handleDeleteTask = async (e: React.MouseEvent, moduleId: string, taskId: string) => {
     e.stopPropagation();
     if (!confirm("Are you sure you want to delete this task?")) return;
-    
+
     setDeletingTaskId(taskId);
     setUpdatingTasks((prev) => new Set(prev).add(taskId));
-    
+
     setModules((prev) =>
       prev.map((module) =>
         module.id === moduleId
@@ -266,26 +266,26 @@ export default function DocumentationDashboard({
   const handleCreateTaskSave = async (moduleId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!newTaskName.trim()) return;
-    
+
     setCreatingTasks((prev) => new Set(prev).add(moduleId));
     const module = modules.find((m) => m.id === moduleId);
     const nextOrder = module ? module.tasks.length + 1 : 1;
-    
+
     setModules((prev) =>
       prev.map((m) =>
         m.id === moduleId
           ? {
-              ...m,
-              tasks: [
-                ...m.tasks,
-                {
-                  id: `temp-${Date.now()}`,
-                  name: newTaskName.trim(),
-                  task_order: nextOrder,
-                  is_completed: false,
-                },
-              ],
-            }
+            ...m,
+            tasks: [
+              ...m.tasks,
+              {
+                id: `temp-${Date.now()}`,
+                name: newTaskName.trim(),
+                task_order: nextOrder,
+                is_completed: false,
+              },
+            ],
+          }
           : m
       )
     );
@@ -306,13 +306,13 @@ export default function DocumentationDashboard({
         prev.map((m) =>
           m.id === moduleId
             ? {
-                ...m,
-                tasks: m.tasks.map((t) =>
-                  t.id.startsWith("temp-") && t.name === newTaskName.trim()
-                    ? { ...t, id: result.data!.id }
-                    : t
-                ),
-              }
+              ...m,
+              tasks: m.tasks.map((t) =>
+                t.id.startsWith("temp-") && t.name === newTaskName.trim()
+                  ? { ...t, id: result.data!.id }
+                  : t
+              ),
+            }
             : m
         )
       );
@@ -349,7 +349,7 @@ export default function DocumentationDashboard({
   const handleEditModuleSave = async (moduleId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!editModuleValue.trim()) return;
-    
+
     setUpdatingModules((prev) => new Set(prev).add(moduleId));
     setModules((prev) =>
       prev.map((module) =>
@@ -386,12 +386,12 @@ export default function DocumentationDashboard({
 
   const handleDeleteModule = async (e: React.MouseEvent, moduleId: string, taskCount: number) => {
     e.stopPropagation();
-    const message = taskCount > 0 
+    const message = taskCount > 0
       ? `Are you sure? This will delete the module and all ${taskCount} task(s) inside.`
       : "Are you sure you want to delete this module?";
-      
+
     if (!confirm(message)) return;
-    
+
     setDeletingModuleId(moduleId);
     setUpdatingModules((prev) => new Set(prev).add(moduleId));
     setModules((prev) => prev.filter((m) => m.id !== moduleId));
@@ -419,7 +419,7 @@ export default function DocumentationDashboard({
   const handleCreateModuleSave = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!newModuleName.trim()) return;
-    
+
     // Optimistic update
     setModules((prev) => [
       ...prev,
@@ -432,7 +432,7 @@ export default function DocumentationDashboard({
     ]);
 
     const result = await createModuleAction(newModuleName.trim());
-    
+
     if (result.error) {
       alert("Failed to create module: " + result.error);
       router.refresh();
@@ -481,7 +481,7 @@ export default function DocumentationDashboard({
       // Temporarily expand all modules for export
       const wasExpanded = new Set(expandedModules);
       setExpandedModules(new Set(modules.map((m) => m.id)));
-      
+
       // Wait for DOM update
       await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -654,11 +654,10 @@ export default function DocumentationDashboard({
               <button
                 key={option}
                 onClick={() => setFilter(option)}
-                className={`px-4 py-3 brutal-border font-bold uppercase text-sm transition-all ${
-                  filter === option
+                className={`px-4 py-3 brutal-border font-bold uppercase text-sm transition-all ${filter === option
                     ? "bg-primary text-primary-foreground brutal-shadow-sm"
                     : "bg-card hover:bg-accent"
-                }`}
+                  }`}
               >
                 {option}
               </button>
@@ -702,9 +701,8 @@ export default function DocumentationDashboard({
             return (
               <div
                 key={module.id}
-                className={`brutal-border brutal-shadow transition-all ${
-                  isComplete ? "bg-[#4ade80]/20" : "bg-card"
-                } ${isUpdatingModule || isDeletingModule ? "opacity-70" : ""}`}
+                className={`brutal-border brutal-shadow transition-all ${isComplete ? "bg-[#4ade80]/20" : "bg-card"
+                  } ${isUpdatingModule || isDeletingModule ? "opacity-70" : ""}`}
               >
                 {/* Module Header */}
                 <div className="w-full p-4 flex items-center justify-between hover:bg-secondary/50 transition-colors">
@@ -786,9 +784,8 @@ export default function DocumentationDashboard({
                       </span>
                     )}
                     <span
-                      className={`px-3 py-1 brutal-border text-sm font-bold ${
-                        isComplete ? "bg-[#4ade80]" : "bg-[#ffd60a]"
-                      }`}
+                      className={`px-3 py-1 brutal-border text-sm font-bold ${isComplete ? "bg-[#4ade80]" : "bg-[#ffd60a]"
+                        }`}
                     >
                       {moduleProgress}/{module.tasks.length}
                     </span>
@@ -839,18 +836,16 @@ export default function DocumentationDashboard({
                         <div
                           key={task.id}
                           onClick={() => !isEditingTask && openTaskEditor(task.id)}
-                          className={`p-4 border-b-2 border-border last:border-b-0 flex items-center gap-4 transition-all ${
-                            task.is_completed ? "bg-[#4ade80]/10" : "hover:bg-secondary/50"
-                          } ${isUpdatingTask ? "opacity-60" : ""}`}
+                          className={`p-4 border-b-2 border-border last:border-b-0 flex items-center gap-4 transition-all ${task.is_completed ? "bg-[#4ade80]/10" : "hover:bg-secondary/50"
+                            } ${isUpdatingTask ? "opacity-60" : ""}`}
                         >
                           <button
                             onClick={(e) => handleToggleTask(e, module.id, task.id, task.is_completed)}
                             disabled={isUpdatingTask}
-                            className={`w-6 h-6 brutal-border flex-shrink-0 flex items-center justify-center transition-all ${
-                              task.is_completed
+                            className={`w-6 h-6 brutal-border flex-shrink-0 flex items-center justify-center transition-all ${task.is_completed
                                 ? "bg-primary text-primary-foreground"
                                 : "bg-card hover:bg-accent"
-                            } ${isUpdatingTask ? "cursor-not-allowed" : ""}`}
+                              } ${isUpdatingTask ? "cursor-not-allowed" : ""}`}
                           >
                             {task.is_completed && (
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -895,9 +890,8 @@ export default function DocumentationDashboard({
                               </div>
                             ) : (
                               <span
-                                className={`font-medium block truncate ${
-                                  task.is_completed ? "line-through opacity-60" : ""
-                                }`}
+                                className={`font-medium block truncate ${task.is_completed ? "opacity-60" : ""
+                                  }`}
                                 title={task.name}
                               >
                                 {task.name}

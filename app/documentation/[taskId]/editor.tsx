@@ -13,31 +13,32 @@ import {
 } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
-import { Node as TipTapNode, mergeAttributes } from "@tiptap/core";
-import mermaid from "mermaid";
 
-// Initialize mermaid on client only
-if (typeof window !== "undefined") {
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: "default",
-    securityLevel: "loose",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  });
-}
-
-/* ────────────────────────────────────────────────────────────── */
-/*  Mermaid Block — React NodeView                                */
-/* ────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────
+   Mermaid React NodeView
+   ──────────────────────────────────────────── */
 
 function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
   const counter = useRef(0);
+  const mermaidRef = useRef<any>(null);
   const code = node.textContent;
 
   useEffect(() => {
-    if (!code.trim()) {
+    if (typeof window === "undefined") return;
+    import("mermaid").then((m) => {
+      mermaidRef.current = m.default;
+      mermaidRef.current.initialize({
+        startOnLoad: false,
+        theme: "default",
+        securityLevel: "loose",
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!code.trim() || !mermaidRef.current) {
       setSvg("");
       setError("");
       return;
@@ -49,7 +50,10 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
 
     const timeout = setTimeout(async () => {
       try {
-        const { svg: result } = await mermaid.render(id, code.trim());
+        const { svg: result } = await mermaidRef.current.render(
+          id,
+          code.trim()
+        );
         if (!cancelled) {
           setSvg(result);
           setError("");
@@ -74,15 +78,12 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
       className={`mermaid-node my-4 ${selected ? "ring-2 ring-blue-300 rounded-xl" : ""}`}
     >
       <div className="rounded-xl border border-gray-200 overflow-hidden">
-        {/* Header */}
         <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-purple-50 to-indigo-50 border-b border-gray-200">
           <Sparkles className="w-3 h-3 text-purple-500" />
           <span className="text-[11px] font-semibold text-purple-700 tracking-wide uppercase">
             Mermaid
           </span>
         </div>
-
-        {/* Code editor */}
         <div className="bg-gray-900 p-4">
           <NodeViewContent
             as="pre"
@@ -90,8 +91,6 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
             className="text-sm font-mono text-gray-100 leading-relaxed outline-none whitespace-pre-wrap break-words min-h-[48px] caret-white m-0 bg-transparent"
           />
         </div>
-
-        {/* Preview */}
         {(svg || error) && (
           <div className="border-t border-gray-200 bg-white">
             <div className="px-3 py-1 bg-gray-50 border-b border-gray-100">
@@ -118,38 +117,52 @@ function MermaidBlock({ node, selected }: { node: any; selected: boolean }) {
   );
 }
 
-/* ────────────────────────────────────────────────────────────── */
-/*  Mermaid Node Extension for TipTap                             */
-/* ────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────
+   Create Mermaid Extension at runtime
+   (require() bypasses pnpm strict hoisting)
+   ──────────────────────────────────────────── */
 
-const MermaidDiagram = TipTapNode.create({
-  name: "mermaidDiagram",
-  group: "block",
-  content: "text*",
-  marks: "",
-  code: true,
-  defining: true,
+let _mermaidExt: any = null;
 
-  parseHTML() {
-    return [{ tag: 'div[data-type="mermaid-diagram"]' }];
-  },
+function getMermaidExtension() {
+  if (_mermaidExt) return _mermaidExt;
 
-  renderHTML({ HTMLAttributes }) {
-    return [
-      "div",
-      mergeAttributes(HTMLAttributes, { "data-type": "mermaid-diagram" }),
-      0,
-    ];
-  },
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const core = require("@tiptap/core") as typeof import("@tiptap/core");
 
-  addNodeView() {
-    return ReactNodeViewRenderer(MermaidBlock);
-  },
-});
+  _mermaidExt = core.Node.create({
+    name: "mermaidDiagram",
+    group: "block",
+    content: "text*",
+    marks: "",
+    code: true,
+    defining: true,
 
-/* ────────────────────────────────────────────────────────────── */
-/*  Editor Component (your layout + Mermaid)                      */
-/* ────────────────────────────────────────────────────────────── */
+    parseHTML() {
+      return [{ tag: 'div[data-type="mermaid-diagram"]' }];
+    },
+
+    renderHTML({ HTMLAttributes }: any) {
+      return [
+        "div",
+        core.mergeAttributes(HTMLAttributes, {
+          "data-type": "mermaid-diagram",
+        }),
+        0,
+      ];
+    },
+
+    addNodeView() {
+      return ReactNodeViewRenderer(MermaidBlock);
+    },
+  });
+
+  return _mermaidExt;
+}
+
+/* ────────────────────────────────────────────
+   Editor Component
+   ──────────────────────────────────────────── */
 
 interface TaskEditorProps {
   taskId: string;
@@ -182,7 +195,7 @@ export default function TaskEditor({
       Placeholder.configure({
         placeholder: "Type '/' for commands, or start writing...",
       }),
-      MermaidDiagram,
+      getMermaidExtension(),
     ],
     content:
       initialContent && Object.keys(initialContent).length > 0
@@ -240,13 +253,11 @@ export default function TaskEditor({
   // Insert Mermaid Diagram
   const insertMermaidDiagram = useCallback(() => {
     if (!editor) return;
-
     const template = `graph TD
     A[Start] --> B{Decision}
     B -- Yes --> C[Continue]
     B -- No --> D[Fix it]
     D --> B`;
-
     editor
       .chain()
       .focus()
@@ -266,7 +277,7 @@ export default function TaskEditor({
     return () => clearTimeout(timer);
   }, [hasChanges, isSaving, handleSave]);
 
-  // Keyboard shortcuts
+  // Keyboard shortcut: Ctrl/Cmd + S and Ctrl/Cmd + M
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
@@ -320,10 +331,11 @@ export default function TaskEditor({
       type="button"
       onClick={onClick}
       title={title}
-      className={`p-2 rounded transition-colors ${isActive
+      className={`p-2 rounded transition-colors ${
+        isActive
           ? "bg-gray-200 text-gray-900"
           : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-        }`}
+      }`}
     >
       {children}
     </button>
@@ -384,10 +396,11 @@ export default function TaskEditor({
           <button
             onClick={handleSave}
             disabled={isSaving || !hasChanges}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${isSaving || !hasChanges
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
+              isSaving || !hasChanges
                 ? "bg-gray-100 text-gray-400 cursor-not-allowed"
                 : "bg-black text-white hover:bg-gray-800 active:scale-[0.98]"
-              }`}
+            }`}
           >
             {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -513,7 +526,7 @@ export default function TaskEditor({
 
             <div className="w-px bg-gray-200 mx-1" />
 
-            {/* ✨ Mermaid Diagram Button */}
+            {/* Mermaid Diagram */}
             <ToolbarButton
               onClick={insertMermaidDiagram}
               title="Insert Mermaid Diagram (Ctrl+M)"
@@ -542,7 +555,7 @@ export default function TaskEditor({
         </div>
       </div>
 
-      {/* Footer */}
+      {/* Footer Status */}
       <footer className="border-t border-gray-100 bg-white/80 backdrop-blur-sm px-4 py-2 text-xs text-gray-400 flex items-center justify-between">
         <span>
           {hasChanges ? "● Unsaved changes" : "✓ All changes saved"}
@@ -556,7 +569,7 @@ export default function TaskEditor({
           <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">
             S
           </kbd>{" "}
-          to save &middot;{" "}
+          to save ·{" "}
           <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">
             Ctrl
           </kbd>{" "}
@@ -588,7 +601,6 @@ export default function TaskEditor({
             monospace;
         }
 
-        /* ── Prose / Content Styles ── */
         .notion-prose {
           --tw-prose-body: #374151;
           --tw-prose-headings: #111827;
@@ -719,21 +731,19 @@ export default function TaskEditor({
           border-radius: 0.25rem;
         }
 
-        /* ── Mermaid Node Overrides ── */
+        /* ── Mermaid Node ── */
         .mermaid-node pre {
           margin: 0;
           padding: 0;
           background: transparent;
           border-radius: 0;
         }
-
         .mermaid-node pre code {
           background: transparent;
           color: #f3f4f6;
           padding: 0;
           font-size: 0.875em;
         }
-
         .mermaid-node .ProseMirror-selectednode {
           outline: none;
         }

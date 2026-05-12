@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  useState,
-  useRef,
-  useEffect,
-  useCallback,
-  useMemo,
-} from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   toggleTaskAction,
   updateTaskAction,
@@ -20,7 +14,7 @@ import {
   logoutAction,
 } from "./actions";
 
-/* ───────────────────── Types ───────────────────── */
+/* ───── Types ───── */
 
 interface Task {
   id: string;
@@ -28,7 +22,6 @@ interface Task {
   task_order: number;
   is_completed: boolean;
   module_id: string;
-  updated_at: string;
 }
 
 interface Module {
@@ -38,21 +31,20 @@ interface Module {
   tasks: Task[];
 }
 
+interface Point {
+  x: number;
+  y: number;
+}
+
 interface Stroke {
   color: string;
   width: number;
-  points: { x: number; y: number }[];
-}
-
-interface DrawingData {
-  strokes: Stroke[];
+  points: Point[];
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-/* ───────────────────── Color Palette ───────────────────── */
-
-const PRESET_COLORS = [
+const COLORS = [
   "#2a231c",
   "#b54c47",
   "#b08542",
@@ -63,117 +55,106 @@ const PRESET_COLORS = [
   "#5a5a5a",
 ];
 
-const BRUSH_SIZES = [2, 4, 8, 14, 24];
+const SIZES = [2, 4, 8, 14, 24];
 
-/* ───────────────────── Main Component ───────────────────── */
+/* ───── Dashboard ───── */
 
-export function DocumentationApp({
+export default function DocumentationDashboard({
   initialModules,
 }: {
   initialModules: Module[];
 }) {
   const [modules, setModules] = useState<Module[]>(initialModules);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [expandedModuleIds, setExpandedModuleIds] = useState<Set<string>>(
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(
     () => new Set(initialModules.map((m) => m.id))
   );
 
-  /* ── Text state ── */
+  /* text */
   const [textContent, setTextContent] = useState("");
-  const textSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const textTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /* ── Drawing state ── */
+  /* canvas */
   const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const [history, setHistory] = useState<Stroke[][]>([]);
   const [currentStroke, setCurrentStroke] = useState<Stroke | null>(null);
-  const [drawingHistory, setDrawingHistory] = useState<Stroke[][]>([]);
-  const [activeTool, setActiveTool] = useState<"pen" | "eraser">("pen");
+  const [tool, setTool] = useState<"pen" | "eraser">("pen");
   const [penColor, setPenColor] = useState("#2a231c");
   const [brushSize, setBrushSize] = useState(4);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const isDrawingRef = useRef(false);
-  const drawSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const drawing = useRef(false);
+  const drawTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /* ── UI state ── */
+  /* ui */
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [editingModuleId, setEditingModuleId] = useState<string | null>(null);
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [moduleDraftName, setModuleDraftName] = useState("");
-  const [taskDraftName, setTaskDraftName] = useState("");
-  const [newModuleName, setNewModuleName] = useState("");
-  const [newTaskNames, setNewTaskNames] = useState<Record<string, string>>({});
-  const [showNewTaskInput, setShowNewTaskInput] = useState<string | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<{
+  const [editModuleId, setEditModuleId] = useState<string | null>(null);
+  const [editTaskId, setEditTaskId] = useState<string | null>(null);
+  const [modDraft, setModDraft] = useState("");
+  const [taskDraft, setTaskDraft] = useState("");
+  const [newModName, setNewModName] = useState("");
+  const [newTaskName, setNewTaskName] = useState("");
+  const [showNewTask, setShowNewTask] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{
     type: "module" | "task";
     id: string;
     name: string;
   } | null>(null);
 
-  /* ── Derived ── */
-  const selectedTask = useMemo(() => {
-    for (const m of modules) {
-      const t = m.tasks.find((t) => t.id === selectedTaskId);
-      if (t) return t;
-    }
-    return null;
-  }, [modules, selectedTaskId]);
+  /* derived */
+  const selectedTask = modules
+    .flatMap((m) => m.tasks)
+    .find((t) => t.id === selectedTaskId);
 
-  const selectedModuleName = useMemo(() => {
-    if (!selectedTask) return "";
-    const m = modules.find((m) => m.id === selectedTask.module_id);
-    return m?.name || "";
-  }, [modules, selectedTask]);
+  const selectedModuleName = selectedTask
+    ? modules.find((m) => m.id === selectedTask.module_id)?.name ?? ""
+    : "";
 
-  /* ═══════════════════════ Canvas ═══════════════════════ */
+  /* ═══════ Canvas helpers ═══════ */
 
-  const getCanvasPoint = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return { x: 0, y: 0 };
-      const rect = canvas.getBoundingClientRect();
-      const clientX = "touches" in e ? e.touches[0]?.clientX ?? e.changedTouches[0]?.clientX : e.clientX;
-      const clientY = "touches" in e ? e.touches[0]?.clientY ?? e.changedTouches[0]?.clientY : e.clientY;
+  const canvasPoint = useCallback(
+    (e: React.MouseEvent | React.TouchEvent): Point | null => {
+      const c = canvasRef.current;
+      if (!c) return null;
+      const r = c.getBoundingClientRect();
+      const cx =
+        "touches" in e
+          ? (e.touches[0]?.clientX ?? e.changedTouches[0]?.clientX)
+          : e.clientX;
+      const cy =
+        "touches" in e
+          ? (e.touches[0]?.clientY ?? e.changedTouches[0]?.clientY)
+          : e.clientY;
       return {
-        x: ((clientX - rect.left) / rect.width) * canvas.width,
-        y: ((clientY - rect.top) / rect.height) * canvas.height,
+        x: ((cx - r.left) / r.width) * c.width,
+        y: ((cy - r.top) / r.height) * c.height,
       };
     },
     []
   );
 
   const renderCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
     if (!ctx) return;
+    ctx.clearRect(0, 0, c.width, c.height);
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const allStrokes = currentStroke ? [...strokes, currentStroke] : strokes;
-
-    for (const stroke of allStrokes) {
-      if (stroke.points.length < 2) continue;
-
+    const all = currentStroke ? [...strokes, currentStroke] : strokes;
+    for (const s of all) {
+      if (s.points.length < 2) continue;
       ctx.beginPath();
-      ctx.strokeStyle = stroke.color;
-      ctx.lineWidth = stroke.width;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.width;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-
-      const pts = stroke.points;
+      const pts = s.points;
       ctx.moveTo(pts[0].x, pts[0].y);
-
-      if (pts.length === 2) {
-        ctx.lineTo(pts[1].x, pts[1].y);
-      } else {
-        for (let i = 1; i < pts.length - 1; i++) {
-          const midX = (pts[i].x + pts[i + 1].x) / 2;
-          const midY = (pts[i].y + pts[i + 1].y) / 2;
-          ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
-        }
-        const last = pts[pts.length - 1];
-        ctx.lineTo(last.x, last.y);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const mx = (pts[i].x + pts[i + 1].x) / 2;
+        const my = (pts[i].y + pts[i + 1].y) / 2;
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
       }
-
+      ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
       ctx.stroke();
     }
   }, [strokes, currentStroke]);
@@ -182,15 +163,14 @@ export function DocumentationApp({
     renderCanvas();
   }, [renderCanvas]);
 
-  /* Size canvas on mount */
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const c = canvasRef.current;
+    if (!c) return;
     const resize = () => {
-      const rect = canvas.parentElement?.getBoundingClientRect();
-      if (!rect) return;
-      canvas.width = rect.width;
-      canvas.height = 400;
+      const p = c.parentElement?.getBoundingClientRect();
+      if (!p) return;
+      c.width = p.width;
+      c.height = 360;
       renderCanvas();
     };
     resize();
@@ -198,301 +178,309 @@ export function DocumentationApp({
     return () => window.removeEventListener("resize", resize);
   }, [renderCanvas]);
 
-  /* ── Canvas pointer handlers ── */
+  /* ═══════ Canvas pointer events ═══════ */
 
-  const handlePointerDown = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  const onPointerDown = useCallback(
+    (e: React.MouseEvent | React.TouchEvent) => {
       e.preventDefault();
-      isDrawingRef.current = true;
-      const point = getCanvasPoint(e);
+      const pt = canvasPoint(e);
+      if (!pt) return;
+      drawing.current = true;
       setCurrentStroke({
-        color: activeTool === "eraser" ? "#ffffff" : penColor,
-        width: activeTool === "eraser" ? brushSize * 3 : brushSize,
-        points: [point],
+        color: tool === "eraser" ? "#ffffff" : penColor,
+        width: tool === "eraser" ? brushSize * 3 : brushSize,
+        points: [pt],
       });
     },
-    [activeTool, penColor, brushSize, getCanvasPoint]
+    [tool, penColor, brushSize, canvasPoint]
   );
 
-  const handlePointerMove = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-      if (!isDrawingRef.current) return;
+  const onPointerMove = useCallback(
+    (e: React.MouseEvent | React.TouchEvent) => {
+      if (!drawing.current) return;
       e.preventDefault();
-      const point = getCanvasPoint(e);
+      const pt = canvasPoint(e);
+      if (!pt) return;
       setCurrentStroke((prev) =>
-        prev ? { ...prev, points: [...prev.points, point] } : null
+        prev ? { ...prev, points: [...prev.points, pt] } : null
       );
     },
-    [getCanvasPoint]
+    [canvasPoint]
   );
 
-  const handlePointerUp = useCallback(() => {
-    if (!isDrawingRef.current) return;
-    isDrawingRef.current = false;
-
+  const onPointerUp = useCallback(() => {
+    if (!drawing.current) return;
+    drawing.current = false;
     setCurrentStroke((prev) => {
       if (prev && prev.points.length >= 2) {
-        setStrokes((s) => [...s, prev]);
-        setDrawingHistory((h) => [...h, strokes]);
+        setStrokes((s) => {
+          setHistory((h) => [...h, s]);
+          return [...s, prev];
+        });
       }
       return null;
     });
-  }, [strokes]);
+  }, []);
 
-  /* ── Canvas actions ── */
+  const undo = useCallback(() => {
+    setHistory((h) => {
+      if (h.length === 0) return h;
+      setStrokes(h[h.length - 1]);
+      return h.slice(0, -1);
+    });
+  }, []);
 
-  const undoCanvas = useCallback(() => {
-    if (drawingHistory.length === 0) return;
-    const prev = drawingHistory[drawingHistory.length - 1];
-    setStrokes(prev);
-    setDrawingHistory((h) => h.slice(0, -1));
-  }, [drawingHistory]);
-
-  const clearCanvas = useCallback(() => {
-    setDrawingHistory((h) => [...h, strokes]);
+  const clearAll = useCallback(() => {
+    setHistory((h) => [...h, strokes]);
     setStrokes([]);
   }, [strokes]);
 
-  /* ═══════════════════════ Data Loading ═══════════════════════ */
+  /* ═══════ Load documentation ═══════ */
 
-  const loadDocumentation = useCallback(async (taskId: string) => {
+  const loadDoc = useCallback(async (taskId: string) => {
     setSaveStatus("idle");
-    const result = await getDocumentationAction(taskId);
-    if (!result.error) {
-      setTextContent((result.textContent as any)?.text || "");
-      setStrokes((result.drawingContent as any)?.strokes || []);
-      setDrawingHistory([]);
+    const res = await getDocumentationAction(taskId);
+    if (!res.error) {
+      setTextContent((res.textContent as any)?.text ?? "");
+      setStrokes((res.drawingContent as any)?.strokes ?? []);
+      setHistory([]);
     }
   }, []);
 
-  /* ═══════════════════════ Auto-Save ═══════════════════════ */
+  /* ═══════ Auto-save ═══════ */
 
-  const saveDocumentation = useCallback(
-    async (taskId: string, text: string, currentStrokes: Stroke[]) => {
+  const doSave = useCallback(
+    async (taskId: string, text: string, s: Stroke[]) => {
       setSaveStatus("saving");
-      const result = await saveDocumentationAction(
+      const res = await saveDocumentationAction(
         taskId,
         { text },
-        { strokes: currentStrokes }
+        { strokes: s }
       );
-      setSaveStatus(result.error ? "error" : "saved");
-      setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 2000);
+      setSaveStatus(res.error ? "error" : "saved");
+      setTimeout(
+        () => setSaveStatus((v) => (v === "saved" ? "idle" : v)),
+        2000
+      );
     },
     []
   );
 
-  /* Text auto-save (debounced) */
   useEffect(() => {
     if (!selectedTaskId) return;
-    if (textSaveTimerRef.current) clearTimeout(textSaveTimerRef.current);
-    textSaveTimerRef.current = setTimeout(() => {
-      saveDocumentation(selectedTaskId, textContent, strokes);
-    }, 1200);
+    if (textTimerRef.current) clearTimeout(textTimerRef.current);
+    textTimerRef.current = setTimeout(
+      () => doSave(selectedTaskId, textContent, strokes),
+      1200
+    );
     return () => {
-      if (textSaveTimerRef.current) clearTimeout(textSaveTimerRef.current);
+      if (textTimerRef.current) clearTimeout(textTimerRef.current);
     };
-  }, [textContent, selectedTaskId, saveDocumentation]);
+  }, [textContent, selectedTaskId, strokes, doSave]);
 
-  /* Drawing auto-save on stroke completion */
   useEffect(() => {
     if (!selectedTaskId || strokes.length === 0) return;
-    if (drawSaveTimerRef.current) clearTimeout(drawSaveTimerRef.current);
-    drawSaveTimerRef.current = setTimeout(() => {
-      saveDocumentation(selectedTaskId, textContent, strokes);
-    }, 800);
+    if (drawTimerRef.current) clearTimeout(drawTimerRef.current);
+    drawTimerRef.current = setTimeout(
+      () => doSave(selectedTaskId, textContent, strokes),
+      800
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strokes]);
 
-  /* ═══════════════════════ Keyboard Shortcuts ═══════════════════════ */
+  /* ═══════ Keyboard shortcut ═══════ */
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
+    const fn = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
-        if (selectedTaskId) {
-          saveDocumentation(selectedTaskId, textContent, strokes);
-        }
+        if (selectedTaskId) doSave(selectedTaskId, textContent, strokes);
       }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [selectedTaskId, textContent, strokes, saveDocumentation]);
+    window.addEventListener("keydown", fn);
+    return () => window.removeEventListener("keydown", fn);
+  }, [selectedTaskId, textContent, strokes, doSave]);
 
-  /* ═══════════════════════ Task Selection ═══════════════════════ */
+  /* ═══════ Task selection ═══════ */
 
   const selectTask = useCallback(
-    (taskId: string) => {
-      if (taskId === selectedTaskId) return;
-      setSelectedTaskId(taskId);
+    (id: string) => {
+      if (id === selectedTaskId) return;
+      setSelectedTaskId(id);
       setTextContent("");
       setStrokes([]);
-      setDrawingHistory([]);
-      loadDocumentation(taskId);
+      setHistory([]);
+      loadDoc(id);
     },
-    [selectedTaskId, loadDocumentation]
+    [selectedTaskId, loadDoc]
   );
 
-  /* ═══════════════════════ Module Handlers ═══════════════════════ */
+  /* ═══════ Module CRUD ═══════ */
 
-  const toggleModule = (moduleId: string) => {
-    setExpandedModuleIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(moduleId)) next.delete(moduleId);
-      else next.add(moduleId);
-      return next;
+  const toggleMod = (id: string) => {
+    setExpandedIds((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
     });
   };
 
-  const startEditModule = (m: Module) => {
-    setEditingModuleId(m.id);
-    setModuleDraftName(m.name);
-  };
-
-  const commitEditModule = async () => {
-    if (!editingModuleId || !moduleDraftName.trim()) {
-      setEditingModuleId(null);
+  const commitModEdit = async () => {
+    if (!editModuleId || !modDraft.trim()) {
+      setEditModuleId(null);
       return;
     }
-    const result = await updateModuleAction(editingModuleId, moduleDraftName.trim());
-    if (!result.error) {
-      setModules((prev) =>
-        prev.map((m) =>
-          m.id === editingModuleId ? { ...m, name: moduleDraftName.trim() } : m
+    const res = await updateModuleAction(editModuleId, modDraft.trim());
+    if (!res.error) {
+      setModules((ms) =>
+        ms.map((m) =>
+          m.id === editModuleId ? { ...m, name: modDraft.trim() } : m
         )
       );
     }
-    setEditingModuleId(null);
+    setEditModuleId(null);
   };
 
-  const handleCreateModule = async () => {
-    if (!newModuleName.trim()) return;
-    const result = await createModuleAction(newModuleName.trim());
-    if (result.data && !result.error) {
-      setModules((prev) => [
-        ...prev,
+  const createMod = async () => {
+    if (!newModName.trim()) return;
+    const res = await createModuleAction(newModName.trim());
+    if (res.data && !res.error) {
+      setModules((ms) => [
+        ...ms,
         {
-          id: result.data!.id,
-          name: newModuleName.trim(),
-          display_order: prev.length + 1,
+          id: res.data!.id,
+          name: newModName.trim(),
+          display_order: ms.length + 1,
           tasks: [],
         },
       ]);
-      setNewModuleName("");
-      setExpandedModuleIds((prev) => new Set([...prev, result.data!.id]));
+      setNewModName("");
+      setExpandedIds((prev) => new Set([...prev, res.data!.id]));
     }
   };
 
-  const handleDeleteModule = async () => {
-    if (!deleteConfirm || deleteConfirm.type !== "module") return;
-    const result = await deleteModuleAction(deleteConfirm.id);
-    if (!result.error) {
-      setModules((prev) => prev.filter((m) => m.id !== deleteConfirm.id));
-      if (
-        selectedTask &&
-        modules.find((m) => m.id === deleteConfirm.id)?.tasks.some((t) => t.id === selectedTask.id)
-      ) {
+  const deleteMod = async () => {
+    if (!confirm || confirm.type !== "module") return;
+    const res = await deleteModuleAction(confirm.id);
+    if (!res.error) {
+      setModules((ms) => ms.filter((m) => m.id !== confirm.id));
+      const mod = modules.find((m) => m.id === confirm.id);
+      if (mod?.tasks.some((t) => t.id === selectedTaskId))
         setSelectedTaskId(null);
-      }
     }
-    setDeleteConfirm(null);
+    setConfirm(null);
   };
 
-  /* ═══════════════════════ Task Handlers ═══════════════════════ */
+  /* ═══════ Task CRUD ═══════ */
 
-  const handleToggleTask = async (taskId: string, completed: boolean) => {
-    const result = await toggleTaskAction(taskId, completed);
-    if (!result.error) {
-      setModules((prev) =>
-        prev.map((m) => ({
+  const toggleTask = async (id: string, done: boolean) => {
+    const res = await toggleTaskAction(id, done);
+    if (!res.error) {
+      setModules((ms) =>
+        ms.map((m) => ({
           ...m,
           tasks: m.tasks.map((t) =>
-            t.id === taskId ? { ...t, is_completed: completed } : t
+            t.id === id ? { ...t, is_completed: done } : t
           ),
         }))
       );
     }
   };
 
-  const startEditTask = (t: Task) => {
-    setEditingTaskId(t.id);
-    setTaskDraftName(t.name);
-  };
-
-  const commitEditTask = async () => {
-    if (!editingTaskId || !taskDraftName.trim()) {
-      setEditingTaskId(null);
+  const commitTaskEdit = async () => {
+    if (!editTaskId || !taskDraft.trim()) {
+      setEditTaskId(null);
       return;
     }
-    const result = await updateTaskAction(editingTaskId, { name: taskDraftName.trim() });
-    if (!result.error) {
-      setModules((prev) =>
-        prev.map((m) => ({
+    const res = await updateTaskAction(editTaskId, { name: taskDraft.trim() });
+    if (!res.error) {
+      setModules((ms) =>
+        ms.map((m) => ({
           ...m,
           tasks: m.tasks.map((t) =>
-            t.id === editingTaskId ? { ...t, name: taskDraftName.trim() } : t
+            t.id === editTaskId ? { ...t, name: taskDraft.trim() } : t
           ),
         }))
       );
     }
-    setEditingTaskId(null);
+    setEditTaskId(null);
   };
 
-  const handleCreateTask = async (moduleId: string) => {
-    const name = newTaskNames[moduleId]?.trim();
+  const createTask = async (moduleId: string) => {
+    const name = newTaskName.trim();
     if (!name) return;
-    const moduleTasks = modules.find((m) => m.id === moduleId)?.tasks || [];
-    const result = await createTaskAction(moduleId, {
-      name,
-      task_order: moduleTasks.length + 1,
-    });
-    if (result.data && !result.error) {
-      const newTask: Task = {
-        id: result.data.id,
-        name,
-        task_order: moduleTasks.length + 1,
-        is_completed: false,
-        module_id: moduleId,
-        updated_at: new Date().toISOString(),
-      };
-      setModules((prev) =>
-        prev.map((m) =>
-          m.id === moduleId ? { ...m, tasks: [...m.tasks, newTask] } : m
+    const mod = modules.find((m) => m.id === moduleId);
+    const order = (mod?.tasks.length ?? 0) + 1;
+    const res = await createTaskAction(moduleId, { name, task_order: order });
+    if (res.data && !res.error) {
+      setModules((ms) =>
+        ms.map((m) =>
+          m.id === moduleId
+            ? {
+                ...m,
+                tasks: [
+                  ...m.tasks,
+                  {
+                    id: res.data!.id,
+                    name,
+                    task_order: order,
+                    is_completed: false,
+                    module_id: moduleId,
+                  },
+                ],
+              }
+            : m
         )
       );
-      setNewTaskNames((prev) => ({ ...prev, [moduleId]: "" }));
-      setShowNewTaskInput(null);
-      setExpandedModuleIds((prev) => new Set([...prev, moduleId]));
+      setNewTaskName("");
+      setShowNewTask(null);
+      setExpandedIds((prev) => new Set([...prev, moduleId]));
     }
   };
 
-  const handleDeleteTask = async () => {
-    if (!deleteConfirm || deleteConfirm.type !== "task") return;
-    const result = await deleteTaskAction(deleteConfirm.id);
-    if (!result.error) {
-      setModules((prev) =>
-        prev.map((m) => ({
+  const deleteTask = async () => {
+    if (!confirm || confirm.type !== "task") return;
+    const res = await deleteTaskAction(confirm.id);
+    if (!res.error) {
+      setModules((ms) =>
+        ms.map((m) => ({
           ...m,
-          tasks: m.tasks.filter((t) => t.id !== deleteConfirm.id),
+          tasks: m.tasks.filter((t) => t.id !== confirm.id),
         }))
       );
-      if (selectedTaskId === deleteConfirm.id) setSelectedTaskId(null);
+      if (selectedTaskId === confirm.id) setSelectedTaskId(null);
     }
-    setDeleteConfirm(null);
+    setConfirm(null);
   };
 
-  /* ═══════════════════════ Render ═══════════════════════ */
+  /* ═══════════════════════════════════════
+     RENDER
+     ═══════════════════════════════════════ */
 
   return (
     <div className="doc-layout">
       {/* ── Sidebar ── */}
       <aside className="sidebar">
-        <div className="sidebar-header">
-          <div className="sidebar-brand">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <rect x="2" y="2" width="16" height="16" rx="3" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M6 7h8M6 10h6M6 13h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <div className="sidebar-head">
+          <div className="brand">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+              <rect
+                x="2"
+                y="2"
+                width="16"
+                height="16"
+                rx="3"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+              <path
+                d="M6 7h8M6 10h6M6 13h4"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
             </svg>
-            <span>Documentation</span>
+            <span>Docs</span>
           </div>
           <form
             action={async () => {
@@ -500,26 +488,38 @@ export function DocumentationApp({
               window.location.href = "/login";
             }}
           >
-            <button type="submit" className="logout-btn" title="Sign out">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M6 14H3.33C2.6 14 2 13.4 2 12.67V3.33C2 2.6 2.6 2 3.33 2H6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                <path d="M10.67 11.33L14 8l-3.33-3.33M14 8H6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+            <button
+              type="submit"
+              className="icon-btn head-btn"
+              title="Sign out"
+            >
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M6 14H3.33C2.6 14 2 13.4 2 12.67V3.33C2 2.6 2.6 2 3.33 2H6"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M10.67 11.33L14 8l-3.33-3.33M14 8H6"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
               </svg>
             </button>
           </form>
         </div>
 
-        <div className="sidebar-modules">
+        <nav className="sidebar-nav">
           {modules.map((mod) => (
-            <div key={mod.id} className="module-group">
-              <div
-                className="module-header"
-                onClick={() => toggleModule(mod.id)}
-              >
+            <div key={mod.id} className="mod-group">
+              <div className="mod-head" onClick={() => toggleMod(mod.id)}>
                 <svg
-                  className={`module-chevron ${expandedModuleIds.has(mod.id) ? "expanded" : ""}`}
-                  width="14"
-                  height="14"
+                  className={`chev ${expandedIds.has(mod.id) ? "on" : ""}`}
+                  width="13"
+                  height="13"
                   viewBox="0 0 14 14"
                   fill="none"
                 >
@@ -532,84 +532,145 @@ export function DocumentationApp({
                   />
                 </svg>
 
-                {editingModuleId === mod.id ? (
+                {editModuleId === mod.id ? (
                   <input
                     autoFocus
-                    className="inline-edit"
-                    value={moduleDraftName}
-                    onChange={(e) => setModuleDraftName(e.target.value)}
-                    onBlur={commitEditModule}
+                    className="inline-input"
+                    value={modDraft}
+                    onChange={(e) => setModDraft(e.target.value)}
+                    onBlur={commitModEdit}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") commitEditModule();
-                      if (e.key === "Escape") setEditingModuleId(null);
+                      if (e.key === "Enter") commitModEdit();
+                      if (e.key === "Escape") setEditModuleId(null);
                     }}
                     onClick={(e) => e.stopPropagation()}
                   />
                 ) : (
-                  <span className="module-name">{mod.name}</span>
+                  <span className="mod-name">{mod.name}</span>
                 )}
 
-                <div className="module-actions" onClick={(e) => e.stopPropagation()}>
+                <div
+                  className="mod-actions"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <button
-                    className="icon-btn-sm"
-                    onClick={() => startEditModule(mod)}
-                    title="Rename"
+                    className="icon-btn xs"
+                    onClick={() => {
+                      setEditModuleId(mod.id);
+                      setModDraft(mod.name);
+                    }}
                   >
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                      <path d="M8.5 1.5l2 2L4 10H2v-2l6.5-6.5z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    <svg
+                      width="11"
+                      height="11"
+                      viewBox="0 0 12 12"
+                      fill="none"
+                    >
+                      <path
+                        d="M8.5 1.5l2 2L4 10H2v-2l6.5-6.5z"
+                        stroke="currentColor"
+                        strokeWidth="1.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
                     </svg>
                   </button>
                   <button
-                    className="icon-btn-sm danger"
+                    className="icon-btn xs danger"
                     onClick={() =>
-                      setDeleteConfirm({ type: "module", id: mod.id, name: mod.name })
+                      setConfirm({
+                        type: "module",
+                        id: mod.id,
+                        name: mod.name,
+                      })
                     }
-                    title="Delete module"
                   >
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                      <path d="M2 3h8M4.5 3V2a1 1 0 011-1h1a1 1 0 011 1v1M3 3l.5 7a1 1 0 001 1h3a1 1 0 001-1L9 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    <svg
+                      width="11"
+                      height="11"
+                      viewBox="0 0 12 12"
+                      fill="none"
+                    >
+                      <path
+                        d="M2 3h8M4.5 3V2a1 1 0 011-1h1a1 1 0 011 1v1M3 3l.5 7a1 1 0 001 1h3a1 1 0 001-1L9 3"
+                        stroke="currentColor"
+                        strokeWidth="1.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
                     </svg>
                   </button>
                 </div>
               </div>
 
-              {expandedModuleIds.has(mod.id) && (
+              {expandedIds.has(mod.id) && (
                 <div className="task-list">
                   {mod.tasks.map((task) => (
                     <div
                       key={task.id}
-                      className={`task-item ${selectedTaskId === task.id ? "selected" : ""} ${task.is_completed ? "completed" : ""}`}
+                      className={`task-row ${selectedTaskId === task.id ? "sel" : ""} ${task.is_completed ? "done" : ""}`}
                       onClick={() => selectTask(task.id)}
                     >
                       <button
-                        className="task-checkbox"
+                        className="task-check"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleToggleTask(task.id, !task.is_completed);
+                          toggleTask(task.id, !task.is_completed);
                         }}
                       >
                         {task.is_completed ? (
-                          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                            <rect x="1" y="1" width="12" height="12" rx="3" fill="var(--success)" />
-                            <path d="M4 7l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 14 14"
+                            fill="none"
+                          >
+                            <rect
+                              x="1"
+                              y="1"
+                              width="12"
+                              height="12"
+                              rx="3"
+                              fill="var(--ok)"
+                            />
+                            <path
+                              d="M4 7l2 2 4-4"
+                              stroke="#fff"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
                           </svg>
                         ) : (
-                          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                            <rect x="1" y="1" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.2" />
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 14 14"
+                            fill="none"
+                          >
+                            <rect
+                              x="1"
+                              y="1"
+                              width="12"
+                              height="12"
+                              rx="3"
+                              stroke="currentColor"
+                              strokeWidth="1.1"
+                            />
                           </svg>
                         )}
                       </button>
 
-                      {editingTaskId === task.id ? (
+                      {editTaskId === task.id ? (
                         <input
                           autoFocus
-                          className="inline-edit small"
-                          value={taskDraftName}
-                          onChange={(e) => setTaskDraftName(e.target.value)}
-                          onBlur={commitEditTask}
+                          className="inline-input sm"
+                          value={taskDraft}
+                          onChange={(e) => setTaskDraft(e.target.value)}
+                          onBlur={commitTaskEdit}
                           onKeyDown={(e) => {
-                            if (e.key === "Enter") commitEditTask();
-                            if (e.key === "Escape") setEditingTaskId(null);
+                            if (e.key === "Enter") commitTaskEdit();
+                            if (e.key === "Escape") setEditTaskId(null);
                           }}
                           onClick={(e) => e.stopPropagation()}
                         />
@@ -617,47 +678,75 @@ export function DocumentationApp({
                         <span className="task-name">{task.name}</span>
                       )}
 
-                      <div className="task-actions" onClick={(e) => e.stopPropagation()}>
+                      <div
+                        className="task-actions"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <button
-                          className="icon-btn-xs"
-                          onClick={() => startEditTask(task)}
-                          title="Rename"
+                          className="icon-btn xs"
+                          onClick={() => {
+                            setEditTaskId(task.id);
+                            setTaskDraft(task.name);
+                          }}
                         >
-                          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-                            <path d="M8.5 1.5l2 2L4 10H2v-2l6.5-6.5z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                          <svg
+                            width="10"
+                            height="10"
+                            viewBox="0 0 12 12"
+                            fill="none"
+                          >
+                            <path
+                              d="M8.5 1.5l2 2L4 10H2v-2l6.5-6.5z"
+                              stroke="currentColor"
+                              strokeWidth="1.3"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
                           </svg>
                         </button>
                         <button
-                          className="icon-btn-xs danger"
+                          className="icon-btn xs danger"
                           onClick={() =>
-                            setDeleteConfirm({ type: "task", id: task.id, name: task.name })
+                            setConfirm({
+                              type: "task",
+                              id: task.id,
+                              name: task.name,
+                            })
                           }
-                          title="Delete task"
                         >
-                          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-                            <path d="M2 3h8M4.5 3V2a1 1 0 011-1h1a1 1 0 011 1v1M3 3l.5 7a1 1 0 001 1h3a1 1 0 001-1L9 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                          <svg
+                            width="10"
+                            height="10"
+                            viewBox="0 0 12 12"
+                            fill="none"
+                          >
+                            <path
+                              d="M2 3h8M4.5 3V2a1 1 0 011-1h1a1 1 0 011 1v1M3 3l.5 7a1 1 0 001 1h3a1 1 0 001-1L9 3"
+                              stroke="currentColor"
+                              strokeWidth="1.2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
                           </svg>
                         </button>
                       </div>
                     </div>
                   ))}
 
-                  {showNewTaskInput === mod.id ? (
+                  {showNewTask === mod.id ? (
                     <div className="new-task-row">
                       <input
                         autoFocus
-                        className="new-task-input"
+                        className="sidebar-input"
                         placeholder="Task name..."
-                        value={newTaskNames[mod.id] || ""}
-                        onChange={(e) =>
-                          setNewTaskNames((prev) => ({ ...prev, [mod.id]: e.target.value }))
-                        }
+                        value={newTaskName}
+                        onChange={(e) => setNewTaskName(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") handleCreateTask(mod.id);
-                          if (e.key === "Escape") setShowNewTaskInput(null);
+                          if (e.key === "Enter") createTask(mod.id);
+                          if (e.key === "Escape") setShowNewTask(null);
                         }}
                         onBlur={() => {
-                          if (!newTaskNames[mod.id]?.trim()) setShowNewTaskInput(null);
+                          if (!newTaskName.trim()) setShowNewTask(null);
                         }}
                       />
                     </div>
@@ -665,12 +754,22 @@ export function DocumentationApp({
                     <button
                       className="add-task-btn"
                       onClick={() => {
-                        setShowNewTaskInput(mod.id);
-                        setExpandedModuleIds((prev) => new Set([...prev, mod.id]));
+                        setShowNewTask(mod.id);
+                        setExpandedIds((p) => new Set([...p, mod.id]));
                       }}
                     >
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                        <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                      <svg
+                        width="11"
+                        height="11"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                      >
+                        <path
+                          d="M6 2v8M2 6h8"
+                          stroke="currentColor"
+                          strokeWidth="1.3"
+                          strokeLinecap="round"
+                        />
                       </svg>
                       Add task
                     </button>
@@ -679,205 +778,286 @@ export function DocumentationApp({
               )}
             </div>
           ))}
-        </div>
+        </nav>
 
-        <div className="sidebar-footer">
-          <div className="new-module-row">
-            <input
-              className="new-module-input"
-              placeholder="New module..."
-              value={newModuleName}
-              onChange={(e) => setNewModuleName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleCreateModule();
-              }}
-            />
-            <button
-              className="add-module-btn"
-              onClick={handleCreateModule}
-              disabled={!newModuleName.trim()}
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M7 3v8M3 7h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
+        <div className="sidebar-foot">
+          <input
+            className="sidebar-input"
+            placeholder="New module..."
+            value={newModName}
+            onChange={(e) => setNewModName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") createMod();
+            }}
+          />
+          <button
+            className="add-mod-btn"
+            onClick={createMod}
+            disabled={!newModName.trim()}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path
+                d="M7 3v8M3 7h8"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
         </div>
       </aside>
 
-      {/* ── Main Content ── */}
-      <main className="main-content">
+      {/* ── Editor ── */}
+      <main className="editor">
         {!selectedTask ? (
-          <div className="empty-state">
-            <div className="empty-icon">
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                <rect x="8" y="6" width="32" height="36" rx="4" stroke="currentColor" strokeWidth="2" />
-                <path d="M16 16h16M16 22h12M16 28h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-            </div>
-            <h2>Select a task to begin</h2>
-            <p>Choose a task from the sidebar to view or edit its documentation.</p>
+          <div className="empty">
+            <svg width="44" height="44" viewBox="0 0 48 48" fill="none">
+              <rect
+                x="8"
+                y="6"
+                width="32"
+                height="36"
+                rx="4"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <path
+                d="M16 16h16M16 22h12M16 28h8"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+            <h2>Select a task</h2>
+            <p>Pick a task from the sidebar to view or edit its documentation.</p>
           </div>
         ) : (
-          <div className="editor-area">
-            {/* ── Editor Header ── */}
-            <div className="editor-header">
-              <div className="editor-breadcrumb">
-                <span className="breadcrumb-module">{selectedModuleName}</span>
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                  <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                <span className="breadcrumb-task">{selectedTask.name}</span>
+          <div className="editor-inner">
+            {/* header bar */}
+            <div className="ed-head">
+              <div className="breadcrumb">
+                <span className="bc-mod">{selectedModuleName}</span>
+                <span className="bc-sep">/</span>
+                <span className="bc-task">{selectedTask.name}</span>
               </div>
-
-              <div className="editor-meta">
+              <div className="ed-meta">
                 <button
-                  className={`toggle-btn ${selectedTask.is_completed ? "active" : ""}`}
+                  className={`complete-btn ${selectedTask.is_completed ? "on" : ""}`}
                   onClick={() =>
-                    handleToggleTask(selectedTask.id, !selectedTask.is_completed)
+                    toggleTask(selectedTask.id, !selectedTask.is_completed)
                   }
                 >
                   {selectedTask.is_completed ? (
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <rect x="1" y="1" width="12" height="12" rx="3" fill="var(--success)" />
-                      <path d="M4 7l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 14 14"
+                      fill="none"
+                    >
+                      <rect
+                        x="1"
+                        y="1"
+                        width="12"
+                        height="12"
+                        rx="3"
+                        fill="var(--ok)"
+                      />
+                      <path
+                        d="M4 7l2 2 4-4"
+                        stroke="#fff"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
                     </svg>
                   ) : (
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <rect x="1" y="1" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.2" />
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 14 14"
+                      fill="none"
+                    >
+                      <rect
+                        x="1"
+                        y="1"
+                        width="12"
+                        height="12"
+                        rx="3"
+                        stroke="currentColor"
+                        strokeWidth="1.2"
+                      />
                     </svg>
                   )}
-                  {selectedTask.is_completed ? "Completed" : "Mark complete"}
+                  {selectedTask.is_completed ? "Done" : "Complete"}
                 </button>
 
-                <div className={`save-indicator ${saveStatus}`}>
+                <span className={`save-badge ${saveStatus}`}>
                   {saveStatus === "saving" && (
                     <>
-                      <span className="save-dot" /> Saving...
+                      <span className="pulse-dot" /> Saving
                     </>
                   )}
                   {saveStatus === "saved" && (
                     <>
-                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                        <path d="M3 7.5l3 3 5-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 14 14"
+                        fill="none"
+                      >
+                        <path
+                          d="M3 7.5l3 3 5-6"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
                       </svg>
                       Saved
                     </>
                   )}
-                  {saveStatus === "error" && "Save failed"}
-                </div>
+                  {saveStatus === "error" && "Error"}
+                </span>
               </div>
             </div>
 
-            {/* ── Text Editor ── */}
-            <section className="editor-section">
-              <div className="section-label">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M2 3h10M2 7h7M2 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                </svg>
-                Notes
-              </div>
+            {/* text notes */}
+            <section className="sec">
+              <label className="sec-label">Notes</label>
               <textarea
                 className="text-editor"
                 value={textContent}
                 onChange={(e) => setTextContent(e.target.value)}
-                placeholder="Start writing your documentation..."
+                placeholder="Write your documentation here..."
               />
             </section>
 
-            {/* ── Drawing Canvas ── */}
-            <section className="editor-section">
-              <div className="section-label">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M2 12l1.5-4L11 1.5a1 1 0 011.4 0l.1.1a1 1 0 010 1.4L7.5 8.5 2 12z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                Diagram
-              </div>
+            {/* drawing canvas */}
+            <section className="sec">
+              <label className="sec-label">Diagram</label>
 
-              <div className="canvas-toolbar">
-                <div className="tool-group">
+              <div className="toolbar">
+                <div className="tg">
                   <button
-                    className={`tool-btn ${activeTool === "pen" ? "active" : ""}`}
-                    onClick={() => setActiveTool("pen")}
+                    className={`tb ${tool === "pen" ? "on" : ""}`}
+                    onClick={() => setTool("pen")}
                     title="Pen"
                   >
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                      <path d="M11 2l3 3L5 14H2v-3L11 2z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                      <path
+                        d="M11 2l3 3L5 14H2v-3L11 2z"
+                        stroke="currentColor"
+                        strokeWidth="1.3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
                     </svg>
                   </button>
                   <button
-                    className={`tool-btn ${activeTool === "eraser" ? "active" : ""}`}
-                    onClick={() => setActiveTool("eraser")}
+                    className={`tb ${tool === "eraser" ? "on" : ""}`}
+                    onClick={() => setTool("eraser")}
                     title="Eraser"
                   >
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                      <path d="M6 14h7M2.5 10.5l5-5 3.5 3.5-5 5L2.5 10.5z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-                      <path d="M2.5 10.5l3-8 4.5 2-3 8-4.5-2z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                      <path
+                        d="M6 14h7M2.5 10.5l5-5 3.5 3.5-5 5L2.5 10.5z"
+                        stroke="currentColor"
+                        strokeWidth="1.3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M2.5 10.5l3-8 4.5 2-3 8-4.5-2z"
+                        stroke="currentColor"
+                        strokeWidth="1.3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
                     </svg>
                   </button>
                 </div>
 
-                <div className="divider-v" />
+                <div className="sep" />
 
-                <div className="tool-group colors">
-                  {PRESET_COLORS.map((c) => (
+                <div className="tg colors">
+                  {COLORS.map((c) => (
                     <button
                       key={c}
-                      className={`color-dot ${penColor === c ? "active" : ""}`}
-                      style={{ backgroundColor: c }}
+                      className={`dot ${penColor === c ? "on" : ""}`}
+                      style={{ background: c }}
                       onClick={() => {
                         setPenColor(c);
-                        setActiveTool("pen");
+                        setTool("pen");
                       }}
                     />
                   ))}
                 </div>
 
-                <div className="divider-v" />
+                <div className="sep" />
 
-                <div className="tool-group sizes">
-                  {BRUSH_SIZES.map((s) => (
+                <div className="tg sizes">
+                  {SIZES.map((s) => (
                     <button
                       key={s}
-                      className={`size-btn ${brushSize === s ? "active" : ""}`}
+                      className={`sz ${brushSize === s ? "on" : ""}`}
                       onClick={() => setBrushSize(s)}
                     >
                       <span
-                        className="size-dot"
-                        style={{ width: Math.max(s, 3), height: Math.max(s, 3) }}
+                        className="sz-dot"
+                        style={{
+                          width: Math.max(s, 3),
+                          height: Math.max(s, 3),
+                        }}
                       />
                     </button>
                   ))}
                 </div>
 
-                <div className="tool-spacer" />
+                <div className="spacer" />
 
-                <div className="tool-group">
-                  <button className="tool-btn" onClick={undoCanvas} title="Undo">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                      <path d="M3 6h6a3 3 0 010 6H8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-                      <path d="M6 3L3 6l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                <div className="tg">
+                  <button className="tb" onClick={undo} title="Undo">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                      <path
+                        d="M3 6h6a3 3 0 010 6H8"
+                        stroke="currentColor"
+                        strokeWidth="1.3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M6 3L3 6l3 3"
+                        stroke="currentColor"
+                        strokeWidth="1.3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
                     </svg>
                   </button>
-                  <button className="tool-btn danger" onClick={clearCanvas} title="Clear canvas">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                      <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                  <button className="tb danger" onClick={clearAll} title="Clear">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                      <path
+                        d="M3 3l10 10M13 3L3 13"
+                        stroke="currentColor"
+                        strokeWidth="1.3"
+                        strokeLinecap="round"
+                      />
                     </svg>
                   </button>
                 </div>
               </div>
 
-              <div className="canvas-wrapper">
+              <div className="canvas-wrap">
                 <canvas
                   ref={canvasRef}
-                  className="drawing-canvas"
-                  onMouseDown={handlePointerDown}
-                  onMouseMove={handlePointerMove}
-                  onMouseUp={handlePointerUp}
-                  onMouseLeave={handlePointerUp}
-                  onTouchStart={handlePointerDown}
-                  onTouchMove={handlePointerMove}
-                  onTouchEnd={handlePointerUp}
+                  className="canvas"
+                  onMouseDown={onPointerDown}
+                  onMouseMove={onPointerMove}
+                  onMouseUp={onPointerUp}
+                  onMouseLeave={onPointerUp}
+                  onTouchStart={onPointerDown}
+                  onTouchMove={onPointerMove}
+                  onTouchEnd={onPointerUp}
                 />
               </div>
             </section>
@@ -885,26 +1065,26 @@ export function DocumentationApp({
         )}
       </main>
 
-      {/* ── Delete Confirmation Modal ── */}
-      {deleteConfirm && (
-        <div className="modal-overlay" onClick={() => setDeleteConfirm(null)}>
+      {/* ── Modal ── */}
+      {confirm && (
+        <div className="overlay" onClick={() => setConfirm(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Delete {deleteConfirm.type}?</h3>
+            <h3>
+              Delete {confirm.type === "module" ? "module" : "task"}?
+            </h3>
             <p>
-              This will permanently delete{" "}
-              <strong>&ldquo;{deleteConfirm.name}&rdquo;</strong>
-              {deleteConfirm.type === "module" && " and all its tasks and documentation"}.
-              This action cannot be undone.
+              Permanently delete &ldquo;{confirm.name}&rdquo;
+              {confirm.type === "module" &&
+                " and all its tasks and documentation"}
+              . This cannot be undone.
             </p>
-            <div className="modal-actions">
-              <button className="btn-ghost" onClick={() => setDeleteConfirm(null)}>
+            <div className="modal-btns">
+              <button className="btn-cancel" onClick={() => setConfirm(null)}>
                 Cancel
               </button>
               <button
-                className="btn-danger"
-                onClick={
-                  deleteConfirm.type === "module" ? handleDeleteModule : handleDeleteTask
-                }
+                className="btn-delete"
+                onClick={confirm.type === "module" ? deleteMod : deleteTask}
               >
                 Delete
               </button>
@@ -914,52 +1094,47 @@ export function DocumentationApp({
       )}
 
       <style jsx>{`
-        /* ══════════════════════════════════════════════════
-           DESIGN TOKENS
-           ══════════════════════════════════════════════════ */
+        /* ═══════════════════════════════════════
+           RESETS & TOKENS
+           ═══════════════════════════════════════ */
         :global(*) {
           margin: 0;
           padding: 0;
           box-sizing: border-box;
         }
-
         :global(body) {
-          font-family: "Source Serif 4", "Georgia", serif;
-          background: var(--bg);
-          color: var(--text-primary);
+          background: #f5f0e8;
+          color: #2a231c;
           -webkit-font-smoothing: antialiased;
         }
-
         :global(:root) {
           --bg: #f5f0e8;
-          --sidebar-bg: #1e1a16;
+          --surface: #fff;
+          --surface-2: #faf8f3;
+          --sidebar: #1e1a16;
           --sidebar-hover: #2a2520;
-          --sidebar-text: #a89e92;
-          --sidebar-text-active: #f5f0e8;
-          --surface: #ffffff;
-          --surface-hover: #faf8f3;
+          --sidebar-txt: #a89e92;
+          --sidebar-active: #f5f0e8;
           --accent: #b08542;
-          --accent-hover: #96722f;
+          --accent-dim: #96722f;
           --accent-bg: rgba(176, 133, 66, 0.08);
-          --text-primary: #2a231c;
-          --text-secondary: #6b5f52;
-          --text-muted: #9c9084;
+          --fg: #2a231c;
+          --fg-2: #6b5f52;
+          --fg-3: #9c9084;
           --border: #e5ddd3;
-          --border-light: #ede7dd;
-          --success: #4a7c59;
-          --success-bg: rgba(74, 124, 89, 0.08);
+          --border-lt: #ede7dd;
+          --ok: #4a7c59;
+          --ok-bg: rgba(74, 124, 89, 0.08);
           --danger: #b54c47;
           --danger-bg: rgba(181, 76, 71, 0.06);
-          --shadow-sm: 0 1px 2px rgba(42, 35, 28, 0.06);
-          --shadow-md: 0 4px 12px rgba(42, 35, 28, 0.08);
-          --radius-sm: 6px;
-          --radius-md: 8px;
-          --radius-lg: 12px;
+          --r-sm: 6px;
+          --r-md: 8px;
+          --r-lg: 12px;
         }
 
-        /* ══════════════════════════════════════════════════
+        /* ═══════════════════════════════════════
            LAYOUT
-           ══════════════════════════════════════════════════ */
+           ═══════════════════════════════════════ */
         .doc-layout {
           display: grid;
           grid-template-columns: 272px 1fr;
@@ -967,128 +1142,110 @@ export function DocumentationApp({
           overflow: hidden;
         }
 
-        /* ══════════════════════════════════════════════════
+        /* ═══════════════════════════════════════
            SIDEBAR
-           ══════════════════════════════════════════════════ */
+           ═══════════════════════════════════════ */
         .sidebar {
-          background: var(--sidebar-bg);
+          background: var(--sidebar);
           display: flex;
           flex-direction: column;
           overflow: hidden;
         }
 
-        .sidebar-header {
+        .sidebar-head {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          padding: 16px 16px 12px;
+          padding: 16px 14px 12px;
           border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         }
-
-        .sidebar-brand {
+        .brand {
           display: flex;
           align-items: center;
           gap: 8px;
-          color: var(--sidebar-text-active);
+          color: var(--sidebar-active);
           font-family: "Playfair Display", serif;
           font-size: 15px;
           font-weight: 600;
-          letter-spacing: -0.01em;
         }
-
-        .sidebar-brand svg {
-          opacity: 0.6;
+        .brand svg {
+          opacity: 0.55;
         }
-
-        .logout-btn {
-          background: none;
-          border: none;
-          color: var(--sidebar-text);
-          cursor: pointer;
-          padding: 4px;
-          border-radius: var(--radius-sm);
-          display: flex;
-          align-items: center;
-          transition: all 0.15s ease;
+        .head-btn {
+          color: var(--sidebar-txt);
         }
-        .logout-btn:hover {
-          color: var(--sidebar-text-active);
+        .head-btn:hover {
+          color: var(--sidebar-active);
           background: rgba(255, 255, 255, 0.06);
         }
 
-        .sidebar-modules {
+        .sidebar-nav {
           flex: 1;
           overflow-y: auto;
           padding: 8px 0;
         }
-
-        .sidebar-modules::-webkit-scrollbar {
+        .sidebar-nav::-webkit-scrollbar {
           width: 4px;
         }
-        .sidebar-modules::-webkit-scrollbar-thumb {
+        .sidebar-nav::-webkit-scrollbar-thumb {
           background: rgba(255, 255, 255, 0.1);
           border-radius: 2px;
         }
 
-        /* Module group */
-        .module-group {
+        /* Module */
+        .mod-group {
           margin-bottom: 2px;
         }
-
-        .module-header {
+        .mod-head {
           display: flex;
           align-items: center;
           gap: 4px;
           padding: 8px 12px;
-          color: var(--sidebar-text);
+          color: var(--sidebar-txt);
           cursor: pointer;
           user-select: none;
-          transition: all 0.12s ease;
+          transition: background 0.12s;
           min-height: 36px;
         }
-        .module-header:hover {
+        .mod-head:hover {
           background: var(--sidebar-hover);
-          color: var(--sidebar-text-active);
+          color: var(--sidebar-active);
         }
-
-        .module-chevron {
+        .chev {
           flex-shrink: 0;
-          transition: transform 0.2s ease;
+          transition: transform 0.2s;
           opacity: 0.4;
         }
-        .module-chevron.expanded {
+        .chev.on {
           transform: rotate(90deg);
         }
-
-        .module-name {
+        .mod-name {
           flex: 1;
-          font-size: 13px;
-          font-weight: 500;
-          letter-spacing: 0.02em;
+          font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0.04em;
           text-transform: uppercase;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
-
-        .module-actions {
+        .mod-actions {
           display: none;
           align-items: center;
           gap: 2px;
         }
-        .module-header:hover .module-actions {
+        .mod-head:hover .mod-actions {
           display: flex;
         }
-        .module-header:hover .module-chevron {
+        .mod-head:hover .chev {
           opacity: 0;
         }
 
-        /* Task list */
+        /* Tasks */
         .task-list {
-          padding: 0 0 4px 0;
+          padding-bottom: 4px;
           animation: slideDown 0.15s ease;
         }
-
         @keyframes slideDown {
           from {
             opacity: 0;
@@ -1099,31 +1256,29 @@ export function DocumentationApp({
             transform: translateY(0);
           }
         }
-
-        .task-item {
+        .task-row {
           display: flex;
           align-items: center;
           gap: 8px;
           padding: 6px 12px 6px 30px;
-          color: var(--sidebar-text);
+          color: var(--sidebar-txt);
           cursor: pointer;
-          transition: all 0.12s ease;
+          transition: background 0.12s;
           font-size: 13px;
         }
-        .task-item:hover {
+        .task-row:hover {
           background: var(--sidebar-hover);
-          color: var(--sidebar-text-active);
+          color: var(--sidebar-active);
         }
-        .task-item.selected {
+        .task-row.sel {
           background: rgba(176, 133, 66, 0.12);
-          color: var(--sidebar-text-active);
+          color: var(--sidebar-active);
         }
-        .task-item.completed .task-name {
+        .task-row.done .task-name {
           text-decoration: line-through;
-          opacity: 0.5;
+          opacity: 0.45;
         }
-
-        .task-checkbox {
+        .task-check {
           background: none;
           border: none;
           color: inherit;
@@ -1133,47 +1288,21 @@ export function DocumentationApp({
           flex-shrink: 0;
           line-height: 0;
         }
-
         .task-name {
           flex: 1;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
-
         .task-actions {
           display: none;
           align-items: center;
           gap: 2px;
         }
-        .task-item:hover .task-actions {
+        .task-row:hover .task-actions {
           display: flex;
         }
 
-        .icon-btn-sm,
-        .icon-btn-xs {
-          background: none;
-          border: none;
-          color: inherit;
-          cursor: pointer;
-          padding: 3px;
-          border-radius: 3px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          transition: all 0.12s ease;
-        }
-        .icon-btn-sm:hover,
-        .icon-btn-xs:hover {
-          background: rgba(255, 255, 255, 0.08);
-        }
-        .icon-btn-sm.danger:hover,
-        .icon-btn-xs.danger:hover {
-          color: #e8746e;
-          background: rgba(232, 116, 110, 0.1);
-        }
-
-        /* Add task button */
         .add-task-btn {
           display: flex;
           align-items: center;
@@ -1181,11 +1310,11 @@ export function DocumentationApp({
           padding: 5px 12px 5px 34px;
           background: none;
           border: none;
-          color: var(--sidebar-text);
+          color: var(--sidebar-txt);
           font-size: 12px;
           cursor: pointer;
           opacity: 0;
-          transition: opacity 0.12s ease;
+          transition: opacity 0.12s;
           font-family: inherit;
         }
         .task-list:hover .add-task-btn,
@@ -1200,219 +1329,217 @@ export function DocumentationApp({
           padding: 4px 12px 4px 30px;
         }
 
-        .new-task-input {
+        /* Sidebar input */
+        .sidebar-input {
           width: 100%;
           background: rgba(255, 255, 255, 0.06);
           border: 1px solid rgba(255, 255, 255, 0.1);
           border-radius: 4px;
-          color: var(--sidebar-text-active);
+          color: var(--sidebar-active);
           font-size: 12px;
-          padding: 5px 8px;
+          padding: 6px 8px;
           font-family: inherit;
           outline: none;
-          transition: border-color 0.15s ease;
+          transition: border-color 0.15s;
         }
-        .new-task-input:focus {
+        .sidebar-input:focus {
           border-color: var(--accent);
         }
-        .new-task-input::placeholder {
+        .sidebar-input::placeholder {
           color: rgba(255, 255, 255, 0.25);
         }
 
-        /* Sidebar footer */
-        .sidebar-footer {
+        .sidebar-foot {
+          display: flex;
+          gap: 6px;
           padding: 12px;
           border-top: 1px solid rgba(255, 255, 255, 0.06);
         }
-
-        .new-module-row {
-          display: flex;
-          gap: 6px;
-        }
-
-        .new-module-input {
-          flex: 1;
-          background: rgba(255, 255, 255, 0.06);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 4px;
-          color: var(--sidebar-text-active);
-          font-size: 13px;
-          padding: 6px 10px;
-          font-family: inherit;
-          outline: none;
-          transition: border-color 0.15s ease;
-        }
-        .new-module-input:focus {
-          border-color: var(--accent);
-        }
-        .new-module-input::placeholder {
-          color: rgba(255, 255, 255, 0.25);
-        }
-
-        .add-module-btn {
+        .add-mod-btn {
           background: var(--accent);
           border: none;
-          color: white;
+          color: #fff;
           cursor: pointer;
           padding: 6px 8px;
           border-radius: 4px;
           display: flex;
           align-items: center;
-          justify-content: center;
-          transition: all 0.15s ease;
+          transition: background 0.15s;
         }
-        .add-module-btn:hover:not(:disabled) {
-          background: var(--accent-hover);
+        .add-mod-btn:hover:not(:disabled) {
+          background: var(--accent-dim);
         }
-        .add-module-btn:disabled {
+        .add-mod-btn:disabled {
           opacity: 0.3;
           cursor: default;
         }
 
         /* Inline edit */
-        .inline-edit {
+        .inline-input {
           flex: 1;
           background: rgba(255, 255, 255, 0.08);
           border: 1px solid var(--accent);
           border-radius: 3px;
-          color: var(--sidebar-text-active);
-          font-size: 13px;
+          color: var(--sidebar-active);
+          font-size: 12px;
           padding: 2px 6px;
           font-family: inherit;
           font-weight: 500;
           outline: none;
           min-width: 0;
         }
-        .inline-edit.small {
+        .inline-input.sm {
           font-size: 12px;
-          padding: 1px 4px;
+          padding: 1px 5px;
         }
 
-        /* ══════════════════════════════════════════════════
-           MAIN CONTENT
-           ══════════════════════════════════════════════════ */
-        .main-content {
+        /* Icon buttons */
+        .icon-btn {
+          background: none;
+          border: none;
+          color: inherit;
+          cursor: pointer;
+          padding: 4px;
+          border-radius: 3px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: background 0.12s;
+        }
+        .icon-btn:hover {
+          background: rgba(255, 255, 255, 0.08);
+        }
+        .icon-btn.xs {
+          padding: 3px;
+        }
+        .icon-btn.danger:hover {
+          color: #e8746e;
+          background: rgba(232, 116, 110, 0.1);
+        }
+
+        /* ═══════════════════════════════════════
+           EDITOR
+           ═══════════════════════════════════════ */
+        .editor {
           overflow-y: auto;
           background: var(--bg);
         }
 
-        /* Empty state */
-        .empty-state {
+        .empty {
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
           height: 100%;
-          color: var(--text-muted);
+          color: var(--fg-3);
           gap: 12px;
-          animation: fadeIn 0.4s ease;
+          animation: fadeIn 0.4s;
         }
-        .empty-icon {
-          opacity: 0.25;
-          margin-bottom: 4px;
-        }
-        .empty-state h2 {
+        .empty h2 {
           font-family: "Playfair Display", serif;
           font-size: 20px;
           font-weight: 600;
-          color: var(--text-secondary);
+          color: var(--fg-2);
         }
-        .empty-state p {
+        .empty p {
           font-size: 14px;
-          max-width: 320px;
+          max-width: 300px;
           text-align: center;
           line-height: 1.5;
         }
 
         @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
         }
 
-        /* Editor area */
-        .editor-area {
-          max-width: 860px;
+        .editor-inner {
+          max-width: 820px;
           margin: 0 auto;
-          padding: 32px 40px 80px;
-          animation: fadeIn 0.3s ease;
+          padding: 28px 36px 80px;
+          animation: fadeIn 0.3s;
         }
 
-        .editor-header {
+        .ed-head {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          margin-bottom: 32px;
-          padding-bottom: 16px;
+          margin-bottom: 28px;
+          padding-bottom: 14px;
           border-bottom: 1px solid var(--border);
         }
-
-        .editor-breadcrumb {
+        .breadcrumb {
           display: flex;
           align-items: center;
           gap: 6px;
           font-size: 13px;
-          color: var(--text-muted);
         }
-        .breadcrumb-module {
-          font-weight: 500;
+        .bc-mod {
+          font-weight: 600;
           text-transform: uppercase;
           letter-spacing: 0.04em;
           font-size: 11px;
+          color: var(--fg-3);
         }
-        .breadcrumb-task {
-          color: var(--text-primary);
+        .bc-sep {
+          color: var(--fg-3);
+          font-size: 11px;
+        }
+        .bc-task {
+          color: var(--fg);
           font-weight: 600;
         }
-
-        .editor-meta {
+        .ed-meta {
           display: flex;
           align-items: center;
-          gap: 16px;
+          gap: 14px;
         }
-
-        .toggle-btn {
+        .complete-btn {
           display: flex;
           align-items: center;
           gap: 6px;
           background: none;
           border: 1px solid var(--border);
-          border-radius: var(--radius-sm);
+          border-radius: var(--r-sm);
           padding: 5px 12px;
           font-size: 12px;
           font-family: inherit;
-          color: var(--text-secondary);
+          color: var(--fg-2);
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: all 0.15s;
         }
-        .toggle-btn:hover {
-          border-color: var(--text-muted);
+        .complete-btn:hover {
+          border-color: var(--fg-3);
         }
-        .toggle-btn.active {
-          background: var(--success-bg);
-          border-color: var(--success);
-          color: var(--success);
+        .complete-btn.on {
+          background: var(--ok-bg);
+          border-color: var(--ok);
+          color: var(--ok);
         }
 
-        .save-indicator {
+        .save-badge {
           display: flex;
           align-items: center;
           gap: 5px;
           font-size: 11px;
-          color: var(--text-muted);
-          min-width: 70px;
-          transition: all 0.2s ease;
+          color: var(--fg-3);
+          min-width: 64px;
+          transition: color 0.2s;
         }
-        .save-indicator.saving {
+        .save-badge.saving {
           color: var(--accent);
         }
-        .save-indicator.saved {
-          color: var(--success);
+        .save-badge.saved {
+          color: var(--ok);
         }
-        .save-indicator.error {
+        .save-badge.error {
           color: var(--danger);
         }
-
-        .save-dot {
+        .pulse-dot {
           width: 6px;
           height: 6px;
           border-radius: 50%;
@@ -1420,53 +1547,54 @@ export function DocumentationApp({
           animation: pulse 1s ease infinite;
         }
         @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.3; }
+          0%, 100% {
+            opacity: 1;
+          }
+          50% {
+            opacity: 0.3;
+          }
         }
 
         /* Sections */
-        .editor-section {
-          margin-bottom: 28px;
+        .sec {
+          margin-bottom: 24px;
         }
-
-        .section-label {
-          display: flex;
-          align-items: center;
-          gap: 6px;
+        .sec-label {
+          display: block;
           font-size: 11px;
           font-weight: 600;
           text-transform: uppercase;
           letter-spacing: 0.06em;
-          color: var(--text-muted);
-          margin-bottom: 10px;
+          color: var(--fg-3);
+          margin-bottom: 8px;
         }
 
         /* Text editor */
         .text-editor {
           width: 100%;
-          min-height: 260px;
+          min-height: 240px;
           background: var(--surface);
           border: 1px solid var(--border);
-          border-radius: var(--radius-lg);
-          padding: 20px 24px;
+          border-radius: var(--r-lg);
+          padding: 18px 22px;
           font-family: "Source Serif 4", Georgia, serif;
           font-size: 15px;
           line-height: 1.7;
-          color: var(--text-primary);
+          color: var(--fg);
           resize: vertical;
           outline: none;
-          transition: border-color 0.2s ease, box-shadow 0.2s ease;
+          transition: border-color 0.2s, box-shadow 0.2s;
         }
         .text-editor:focus {
           border-color: var(--accent);
           box-shadow: 0 0 0 3px var(--accent-bg);
         }
         .text-editor::placeholder {
-          color: var(--text-muted);
+          color: var(--fg-3);
         }
 
-        /* Canvas toolbar */
-        .canvas-toolbar {
+        /* Toolbar */
+        .toolbar {
           display: flex;
           align-items: center;
           gap: 6px;
@@ -1474,79 +1602,71 @@ export function DocumentationApp({
           background: var(--surface);
           border: 1px solid var(--border);
           border-bottom: none;
-          border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+          border-radius: var(--r-lg) var(--r-lg) 0 0;
           flex-wrap: wrap;
         }
-
-        .tool-group {
+        .tg {
           display: flex;
           align-items: center;
           gap: 3px;
         }
-
-        .tool-group.colors {
+        .tg.colors {
           gap: 4px;
         }
-
-        .tool-group.sizes {
+        .tg.sizes {
           gap: 2px;
         }
-
-        .divider-v {
+        .sep {
           width: 1px;
           height: 20px;
           background: var(--border);
           margin: 0 4px;
         }
-
-        .tool-spacer {
+        .spacer {
           flex: 1;
         }
-
-        .tool-btn {
+        .tb {
           background: none;
           border: 1px solid transparent;
-          color: var(--text-secondary);
+          color: var(--fg-2);
           cursor: pointer;
           padding: 5px;
           border-radius: 4px;
           display: flex;
           align-items: center;
           justify-content: center;
-          transition: all 0.12s ease;
+          transition: all 0.12s;
         }
-        .tool-btn:hover {
-          background: var(--surface-hover);
-          color: var(--text-primary);
+        .tb:hover {
+          background: var(--surface-2);
+          color: var(--fg);
         }
-        .tool-btn.active {
+        .tb.on {
           background: var(--accent-bg);
           color: var(--accent);
           border-color: var(--accent);
         }
-        .tool-btn.danger:hover {
+        .tb.danger:hover {
           color: var(--danger);
           background: var(--danger-bg);
         }
-
-        .color-dot {
+        .dot {
           width: 16px;
           height: 16px;
           border-radius: 50%;
           border: 2px solid transparent;
           cursor: pointer;
-          transition: all 0.12s ease;
+          transition: all 0.12s;
           padding: 0;
         }
-        .color-dot:hover {
+        .dot:hover {
           transform: scale(1.2);
         }
-        .color-dot.active {
-          border-color: var(--text-primary);
-          box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--text-muted);
+        .dot.on {
+          border-color: var(--fg);
+          box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--fg-3);
         }
-
-        .size-btn {
+        .sz {
           background: none;
           border: 1px solid transparent;
           cursor: pointer;
@@ -1555,43 +1675,40 @@ export function DocumentationApp({
           display: flex;
           align-items: center;
           justify-content: center;
-          transition: all 0.12s ease;
+          transition: all 0.12s;
         }
-        .size-btn:hover {
-          background: var(--surface-hover);
+        .sz:hover {
+          background: var(--surface-2);
         }
-        .size-btn.active {
+        .sz.on {
           background: var(--accent-bg);
           border-color: var(--accent);
         }
-
-        .size-dot {
+        .sz-dot {
           display: block;
           border-radius: 50%;
-          background: var(--text-primary);
+          background: var(--fg);
         }
 
         /* Canvas */
-        .canvas-wrapper {
-          background: #ffffff;
+        .canvas-wrap {
+          background: #fff;
           border: 1px solid var(--border);
-          border-top: 1px solid var(--border-light);
-          border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+          border-radius: 0 0 var(--r-lg) var(--r-lg);
           overflow: hidden;
           cursor: crosshair;
         }
-
-        .drawing-canvas {
+        .canvas {
           display: block;
           width: 100%;
-          height: 400px;
+          height: 360px;
           touch-action: none;
         }
 
-        /* ══════════════════════════════════════════════════
+        /* ═══════════════════════════════════════
            MODAL
-           ══════════════════════════════════════════════════ */
-        .modal-overlay {
+           ═══════════════════════════════════════ */
+        .overlay {
           position: fixed;
           inset: 0;
           background: rgba(30, 26, 22, 0.4);
@@ -1600,19 +1717,17 @@ export function DocumentationApp({
           align-items: center;
           justify-content: center;
           z-index: 100;
-          animation: fadeIn 0.15s ease;
+          animation: fadeIn 0.15s;
         }
-
         .modal {
           background: var(--surface);
-          border-radius: var(--radius-lg);
+          border-radius: var(--r-lg);
           padding: 28px 32px;
-          max-width: 420px;
+          max-width: 400px;
           width: 90%;
           box-shadow: 0 20px 60px rgba(42, 35, 28, 0.2);
           animation: modalIn 0.2s ease;
         }
-
         @keyframes modalIn {
           from {
             opacity: 0;
@@ -1623,72 +1738,52 @@ export function DocumentationApp({
             transform: scale(1) translateY(0);
           }
         }
-
         .modal h3 {
           font-family: "Playfair Display", serif;
           font-size: 18px;
           font-weight: 600;
           margin-bottom: 10px;
-          color: var(--text-primary);
+          color: var(--fg);
         }
-
         .modal p {
           font-size: 14px;
           line-height: 1.6;
-          color: var(--text-secondary);
+          color: var(--fg-2);
           margin-bottom: 24px;
         }
-
-        .modal-actions {
+        .modal-btns {
           display: flex;
           justify-content: flex-end;
           gap: 10px;
         }
-
-        .btn-ghost {
+        .btn-cancel {
           background: none;
           border: 1px solid var(--border);
-          border-radius: var(--radius-sm);
+          border-radius: var(--r-sm);
           padding: 8px 16px;
           font-size: 13px;
           font-family: inherit;
-          color: var(--text-secondary);
+          color: var(--fg-2);
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: all 0.15s;
         }
-        .btn-ghost:hover {
-          background: var(--surface-hover);
-          border-color: var(--text-muted);
+        .btn-cancel:hover {
+          background: var(--surface-2);
+          border-color: var(--fg-3);
         }
-
-        .btn-danger {
+        .btn-delete {
           background: var(--danger);
           border: 1px solid var(--danger);
-          border-radius: var(--radius-sm);
+          border-radius: var(--r-sm);
           padding: 8px 16px;
           font-size: 13px;
           font-family: inherit;
-          color: white;
+          color: #fff;
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: background 0.15s;
         }
-        .btn-danger:hover {
+        .btn-delete:hover {
           background: #943c38;
-        }
-
-        /* ══════════════════════════════════════════════════
-           RESPONSIVE
-           ══════════════════════════════════════════════════ */
-        @media (max-width: 768px) {
-          .doc-layout {
-            grid-template-columns: 1fr;
-          }
-          .sidebar {
-            display: none;
-          }
-          .editor-area {
-            padding: 20px 16px 60px;
-          }
         }
       `}</style>
     </div>

@@ -91,8 +91,6 @@ const DIAGRAM_TEMPLATES = [
 
 /* ────────────────────────────────────────────
    Mermaid Block Component
-   Code is stored as a node attribute (plain string).
-   Editable via <textarea>, preview is read-only SVG.
    ──────────────────────────────────────────── */
 
 function MermaidBlock({
@@ -120,7 +118,6 @@ function MermaidBlock({
   const dragStartRef = useRef({ x: 0, y: 0 });
   const panStartRef = useRef({ x: 0, y: 0 });
 
-  /* Load mermaid library once */
   useEffect(() => {
     if (typeof window === "undefined") return;
     import("mermaid").then((m) => {
@@ -134,12 +131,10 @@ function MermaidBlock({
     });
   }, []);
 
-  /* Sync from node attrs when undo/redo restores them */
   useEffect(() => {
     setLocalCode(node.attrs.code ?? "");
   }, [node.attrs.code]);
 
-  /* Textarea change → save into TipTap node attribute */
   const handleCodeChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const newCode = e.target.value;
@@ -149,7 +144,6 @@ function MermaidBlock({
     [updateAttributes],
   );
 
-  /* Render mermaid SVG (debounced) */
   useEffect(() => {
     if (!mermaidReady || !localCode.trim()) {
       setSvg("");
@@ -190,7 +184,6 @@ function MermaidBlock({
     };
   }, [localCode, mermaidReady]);
 
-  /* Zoom / Pan */
   const handleZoomIn = useCallback(
     () => setZoom((z) => Math.min(z + 0.25, 3)),
     [],
@@ -237,7 +230,6 @@ function MermaidBlock({
     }
   }, []);
 
-  /* Escape to close fullscreen */
   useEffect(() => {
     if (!isFullscreen) return;
     const handler = (e: KeyboardEvent) => {
@@ -246,8 +238,6 @@ function MermaidBlock({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [isFullscreen]);
-
-  /* ── Sub-components ── */
 
   const DiagramPreview = ({ large }: { large?: boolean }) => (
     <div
@@ -300,7 +290,6 @@ function MermaidBlock({
 
   const ViewToolbar = ({ dark }: { dark?: boolean }) => (
     <div className="flex items-center gap-1">
-      {/* Preview / Code toggle */}
       <div
         className={`flex rounded-md p-0.5 ${dark ? "bg-white/10" : "bg-gray-100"}`}
       >
@@ -338,7 +327,6 @@ function MermaidBlock({
         </button>
       </div>
 
-      {/* Zoom (diagram mode only) */}
       {viewMode === "diagram" && (
         <>
           <div
@@ -387,7 +375,6 @@ function MermaidBlock({
         </>
       )}
 
-      {/* Fullscreen */}
       <div
         className={`w-px h-5 mx-1 ${dark ? "bg-white/10" : "bg-gray-200"}`}
       />
@@ -405,8 +392,6 @@ function MermaidBlock({
     </div>
   );
 
-  /* ── Main render ── */
-
   return (
     <>
       <NodeViewWrapper
@@ -418,7 +403,6 @@ function MermaidBlock({
         }`}
       >
         <div className="rounded-2xl border border-gray-200 overflow-hidden shadow-sm bg-white group">
-          {/* Header */}
           <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
             <div className="flex items-center gap-2">
               <div className="flex gap-1.5">
@@ -438,16 +422,12 @@ function MermaidBlock({
             </div>
             <ViewToolbar />
           </div>
-
-          {/* Body */}
           {viewMode === "diagram" ? <DiagramPreview /> : <CodeEditor />}
         </div>
       </NodeViewWrapper>
 
-      {/* Fullscreen modal */}
       {isFullscreen && (
         <div className="fixed inset-0 z-[9999] bg-black/90 backdrop-blur-sm flex flex-col animate-fade-in">
-          {/* FS Header */}
           <div className="flex items-center justify-between px-4 py-3 bg-black/50 border-b border-white/10">
             <div className="flex items-center gap-3">
               <div className="flex gap-1.5">
@@ -474,8 +454,6 @@ function MermaidBlock({
               </button>
             </div>
           </div>
-
-          {/* FS Body */}
           <div className="flex-1 overflow-hidden">
             {viewMode === "diagram" ? (
               <DiagramPreview large />
@@ -490,8 +468,6 @@ function MermaidBlock({
               </div>
             )}
           </div>
-
-          {/* FS Footer */}
           <div className="px-4 py-2 bg-black/50 border-t border-white/10 text-[11px] text-gray-500 flex items-center gap-4">
             <span>
               <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-gray-400 font-mono text-[10px]">
@@ -514,10 +490,7 @@ function MermaidBlock({
 }
 
 /* ────────────────────────────────────────────
-   Mermaid TipTap Node Extension - FIXED
-   - Leaf node (no child content)
-   - Code stored as node attribute with proper serialization
-   - Serialized to JSON via getJSON() correctly
+   Mermaid TipTap Node Extension - SERIALIZATION SAFE
    ──────────────────────────────────────────── */
 
 let _mermaidExt: any = null;
@@ -525,33 +498,35 @@ let _mermaidExt: any = null;
 function getMermaidExtension() {
   if (_mermaidExt) return _mermaidExt;
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const core = require("@tiptap/core") as typeof import("@tiptap/core");
 
   _mermaidExt = core.Node.create({
     name: "mermaidDiagram",
     group: "block",
-    atom: true, // leaf — cannot be split, no child editing
+    atom: true,
 
     addAttributes() {
       return {
         code: {
           default: "",
+          // Parse from DOM attribute
           parseHTML: (element: HTMLElement) => {
-            // Robust parsing: check multiple possible attribute names
             return (
               element.getAttribute("data-mermaid-code") ??
               element.getAttribute("code") ??
               ""
             );
           },
+          // Render to DOM attribute - CRITICAL: always return object with attribute
           renderHTML: (attributes: Record<string, any>) => {
-            // Only render attribute if code exists to avoid empty attributes
-            if (!attributes.code) return {};
+            const code = attributes.code ?? "";
+            // Ensure code is always a plain string, properly escaped for DOM
             return {
-              "data-mermaid-code": attributes.code,
+              "data-mermaid-code": String(code),
             };
           },
+          // Ensure attribute is serialized as plain string in JSON
+          keepOnSplit: false,
         },
       };
     },
@@ -560,13 +535,16 @@ function getMermaidExtension() {
       return [{ tag: 'div[data-type="mermaid-diagram"]' }];
     },
 
-    renderHTML({ HTMLAttributes }: any) {
-      // CRITICAL FIX: Merge attributes in correct order to ensure
-      // data-mermaid-code from addAttributes is preserved in DOM/JSON
+    renderHTML({ HTMLAttributes, node }: any) {
+      // Ensure the code attribute is explicitly included in rendered HTML
+      const code = node?.attrs?.code ?? HTMLAttributes?.["data-mermaid-code"] ?? "";
       return [
         "div",
         core.mergeAttributes(
-          { "data-type": "mermaid-diagram" },
+          { 
+            "data-type": "mermaid-diagram",
+            ...(code ? { "data-mermaid-code": String(code) } : {})
+          },
           HTMLAttributes
         ),
       ];
@@ -574,6 +552,16 @@ function getMermaidExtension() {
 
     addNodeView() {
       return ReactNodeViewRenderer(MermaidBlock);
+    },
+
+    // CRITICAL: Custom toJSON to ensure code attribute survives reference-based serialization
+    toJSON() {
+      return {
+        type: this.name,
+        attrs: {
+          code: this.options.code ?? "",
+        },
+      };
     },
   });
 
@@ -608,7 +596,6 @@ export default function TaskEditor({
   const [showDiagramMenu, setShowDiagramMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  /* Close dropdown on outside click */
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -619,7 +606,6 @@ export default function TaskEditor({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  /* Editor setup */
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -649,14 +635,43 @@ export default function TaskEditor({
     immediatelyRender: false,
   });
 
-  /* Save */
+  /* Save - with serialization sanitization */
   const handleSave = useCallback(async () => {
     if (isSaving) return;
     setIsSaving(true);
     try {
+      // CRITICAL: Sanitize content to ensure mermaid code attributes survive reference-based serialization
+      const sanitizeContent = (obj: any): any => {
+        if (!obj || typeof obj !== "object") return obj;
+        
+        if (Array.isArray(obj)) {
+          return obj.map(sanitizeContent);
+        }
+        
+        // If this is a mermaidDiagram node, ensure code is a plain string
+        if (obj.type === "mermaidDiagram" && obj.attrs?.code !== undefined) {
+          return {
+            ...obj,
+            attrs: {
+              ...obj.attrs,
+              code: String(obj.attrs.code), // Force to plain string
+            },
+          };
+        }
+        
+        // Recursively sanitize all nested objects
+        const result: Record<string, any> = {};
+        for (const [key, value] of Object.entries(obj)) {
+          result[key] = sanitizeContent(value);
+        }
+        return result;
+      };
+
+      const sanitizedContent = sanitizeContent(contentRef.current);
+      
       const result = await saveDocumentationAction(
         taskId,
-        contentRef.current,
+        sanitizedContent,
         null,
       );
       if (!result.error) {
@@ -674,7 +689,6 @@ export default function TaskEditor({
     }
   }, [taskId, isSaving]);
 
-  /* Insert mermaid — code goes into attrs, not content */
   const insertMermaidDiagram = useCallback(
     (templateCode?: string) => {
       if (!editor) return;
@@ -698,7 +712,6 @@ export default function TaskEditor({
     [editor],
   );
 
-  /* Auto-save every 30s */
   useEffect(() => {
     if (!hasChanges || isSaving) return;
     const timer = setTimeout(() => {
@@ -707,7 +720,6 @@ export default function TaskEditor({
     return () => clearTimeout(timer);
   }, [hasChanges, isSaving, handleSave]);
 
-  /* Keyboard shortcuts */
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
@@ -723,7 +735,6 @@ export default function TaskEditor({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleSave, insertMermaidDiagram]);
 
-  /* Unsaved changes warning */
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (hasChanges && !isSaving) {
@@ -735,7 +746,6 @@ export default function TaskEditor({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [hasChanges, isSaving]);
 
-  /* Sync external content */
   useEffect(() => {
     if (editor && initialContent && Object.keys(initialContent).length > 0) {
       const current = editor.getJSON();
@@ -745,7 +755,6 @@ export default function TaskEditor({
     }
   }, [editor, initialContent]);
 
-  /* Toolbar button */
   const ToolbarButton = ({
     onClick,
     isActive,
@@ -784,7 +793,6 @@ export default function TaskEditor({
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
-      {/* ── Header ── */}
       <header className="border-b border-gray-200 bg-white/80 backdrop-blur-sm p-3 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
           <button
@@ -844,10 +852,8 @@ export default function TaskEditor({
         </div>
       </header>
 
-      {/* ── Editor Area ── */}
       <div className="flex-1 overflow-auto">
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
-          {/* Title */}
           <div className="mb-6 pb-4 border-b border-gray-100">
             <input
               type="text"
@@ -863,7 +869,6 @@ export default function TaskEditor({
             </div>
           </div>
 
-          {/* Toolbar */}
           <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border border-gray-200 rounded-lg p-1.5 mb-4 flex flex-wrap gap-1 shadow-sm">
             <ToolbarButton
               onClick={() =>
@@ -951,7 +956,6 @@ export default function TaskEditor({
             </ToolbarButton>
             <div className="w-px bg-gray-200 mx-1" />
 
-            {/* Mermaid dropdown */}
             <div className="relative" ref={menuRef}>
               <button
                 type="button"
@@ -1009,12 +1013,10 @@ export default function TaskEditor({
             </ToolbarButton>
           </div>
 
-          {/* Editor content */}
           <EditorContent editor={editor} />
         </div>
       </div>
 
-      {/* ── Footer ── */}
       <footer className="border-t border-gray-100 bg-white/80 backdrop-blur-sm px-4 py-2 text-xs text-gray-400 flex items-center justify-between">
         <span>
           {hasChanges ? "● Unsaved changes" : "✓ All changes saved"}
@@ -1040,7 +1042,6 @@ export default function TaskEditor({
         </span>
       </footer>
 
-      {/* ── Styles ── */}
       <style jsx global>{`
         @keyframes fade-in {
           from {
@@ -1172,7 +1173,6 @@ export default function TaskEditor({
           border-radius: 0.25rem;
         }
 
-        /* Mermaid node resets */
         .mermaid-node .ProseMirror-focused {
           outline: none;
         }

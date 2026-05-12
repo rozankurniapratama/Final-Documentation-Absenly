@@ -90,7 +90,7 @@ const DIAGRAM_TEMPLATES = [
 ];
 
 /* ────────────────────────────────────────────
-   Mermaid Block Component
+   Mermaid Block Component (UI UNTOUCHED)
    ──────────────────────────────────────────── */
 
 function MermaidBlock({
@@ -509,23 +509,12 @@ function getMermaidExtension() {
       return {
         code: {
           default: "",
-          // Parse from DOM attribute
-          parseHTML: (element: HTMLElement) => {
-            return (
-              element.getAttribute("data-mermaid-code") ??
-              element.getAttribute("code") ??
-              ""
-            );
-          },
-          // Render to DOM attribute - CRITICAL: always return object with attribute
+          parseHTML: (element: HTMLElement) =>
+            element.getAttribute("data-mermaid-code") ?? "",
           renderHTML: (attributes: Record<string, any>) => {
-            const code = attributes.code ?? "";
-            // Ensure code is always a plain string, properly escaped for DOM
-            return {
-              "data-mermaid-code": String(code),
-            };
+            if (!attributes.code) return {};
+            return { "data-mermaid-code": String(attributes.code) };
           },
-          // Ensure attribute is serialized as plain string in JSON
           keepOnSplit: false,
         },
       };
@@ -536,32 +525,26 @@ function getMermaidExtension() {
     },
 
     renderHTML({ HTMLAttributes, node }: any) {
-      // Ensure the code attribute is explicitly included in rendered HTML
       const code = node?.attrs?.code ?? HTMLAttributes?.["data-mermaid-code"] ?? "";
       return [
         "div",
         core.mergeAttributes(
-          { 
-            "data-type": "mermaid-diagram",
-            ...(code ? { "data-mermaid-code": String(code) } : {})
-          },
+          { "data-type": "mermaid-diagram", ...(code ? { "data-mermaid-code": code } : {}) },
           HTMLAttributes
         ),
       ];
     },
 
-    addNodeView() {
-      return ReactNodeViewRenderer(MermaidBlock);
-    },
-
-    // CRITICAL: Custom toJSON to ensure code attribute survives reference-based serialization
+    // Explicitly force JSON serialization to include code attr
     toJSON() {
       return {
         type: this.name,
-        attrs: {
-          code: this.options.code ?? "",
-        },
+        attrs: { code: this.attrs.code ?? "" },
       };
+    },
+
+    addNodeView() {
+      return ReactNodeViewRenderer(MermaidBlock);
     },
   });
 
@@ -586,8 +569,7 @@ export default function TaskEditor({
   initialContent,
 }: TaskEditorProps) {
   const router = useRouter();
-  const contentRef = useRef<object>(initialContent || {});
-
+  
   const [content, setContent] = useState<object>(initialContent || {});
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
@@ -608,72 +590,56 @@ export default function TaskEditor({
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({
-        heading: { levels: [1, 2, 3] },
-      }),
-      Placeholder.configure({
-        placeholder: "Type '/' for commands, or start writing...",
-      }),
+      StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
+      Placeholder.configure({ placeholder: "Type '/' for commands, or start writing..." }),
       getMermaidExtension(),
     ],
-    content:
-      initialContent && Object.keys(initialContent).length > 0
-        ? initialContent
-        : { type: "doc", content: [{ type: "paragraph" }] },
+    content: initialContent && Object.keys(initialContent).length > 0
+      ? initialContent
+      : { type: "doc", content: [{ type: "paragraph" }] },
     editorProps: {
-      attributes: {
-        class:
-          "prose prose-lg max-w-none focus:outline-none notion-prose min-h-[50vh]",
-      },
+      attributes: { class: "prose prose-lg max-w-none focus:outline-none notion-prose min-h-[50vh]" },
     },
     onUpdate: ({ editor }) => {
-      const json = editor.getJSON();
-      setContent(json);
-      contentRef.current = json;
+      // Use structuredClone to prevent reference mutations from Next.js
+      const fresh = JSON.parse(JSON.stringify(editor.getJSON()));
+      setContent(fresh);
       setHasChanges(true);
     },
     immediatelyRender: false,
   });
 
-  /* Save - with serialization sanitization */
+  /* Save - Fetches directly from editor, bypasses stale refs */
   const handleSave = useCallback(async () => {
-    if (isSaving) return;
+    if (isSaving || !editor) return;
     setIsSaving(true);
     try {
-      // CRITICAL: Sanitize content to ensure mermaid code attributes survive reference-based serialization
-      const sanitizeContent = (obj: any): any => {
+      // 1. Get absolute latest state
+      const raw = editor.getJSON();
+      
+      // 2. Deep clone to strip any React/Next.js prototype chains or reference symbols
+      const cleanContent = JSON.parse(JSON.stringify(raw));
+      
+      // 3. Explicitly verify/fix mermaid nodes before sending
+      const sanitizeMermaid = (obj: any): any => {
         if (!obj || typeof obj !== "object") return obj;
+        if (Array.isArray(obj)) return obj.map(sanitizeMermaid);
         
-        if (Array.isArray(obj)) {
-          return obj.map(sanitizeContent);
-        }
-        
-        // If this is a mermaidDiagram node, ensure code is a plain string
-        if (obj.type === "mermaidDiagram" && obj.attrs?.code !== undefined) {
+        if (obj.type === "mermaidDiagram") {
           return {
             ...obj,
-            attrs: {
-              ...obj.attrs,
-              code: String(obj.attrs.code), // Force to plain string
-            },
+            attrs: { code: String(obj.attrs?.code ?? "") }
           };
         }
         
-        // Recursively sanitize all nested objects
-        const result: Record<string, any> = {};
-        for (const [key, value] of Object.entries(obj)) {
-          result[key] = sanitizeContent(value);
-        }
-        return result;
+        const res: Record<string, any> = {};
+        for (const k in obj) res[k] = sanitizeMermaid(obj[k]);
+        return res;
       };
 
-      const sanitizedContent = sanitizeContent(contentRef.current);
+      const payload = sanitizeMermaid(cleanContent);
+      const result = await saveDocumentationAction(taskId, payload, null);
       
-      const result = await saveDocumentationAction(
-        taskId,
-        sanitizedContent,
-        null,
-      );
       if (!result.error) {
         setLastSaved(new Date());
         setHasChanges(false);
@@ -687,14 +653,12 @@ export default function TaskEditor({
     } finally {
       setIsSaving(false);
     }
-  }, [taskId, isSaving]);
+  }, [taskId, isSaving, editor]);
 
   const insertMermaidDiagram = useCallback(
     (templateCode?: string) => {
       if (!editor) return;
-      const code =
-        templateCode ||
-        `graph TD
+      const code = templateCode || `graph TD
     A[Start] --> B{Decision}
     B -- Yes --> C[Continue]
     B -- No --> D[Fix it]
@@ -702,10 +666,7 @@ export default function TaskEditor({
       editor
         .chain()
         .focus()
-        .insertContent({
-          type: "mermaidDiagram",
-          attrs: { code },
-        })
+        .insertContent({ type: "mermaidDiagram", attrs: { code } })
         .run();
       setShowDiagramMenu(false);
     },
@@ -714,9 +675,7 @@ export default function TaskEditor({
 
   useEffect(() => {
     if (!hasChanges || isSaving) return;
-    const timer = setTimeout(() => {
-      handleSave();
-    }, 30000);
+    const timer = setTimeout(handleSave, 30000);
     return () => clearTimeout(timer);
   }, [hasChanges, isSaving, handleSave]);
 
@@ -771,9 +730,7 @@ export default function TaskEditor({
       onClick={onClick}
       title={title}
       className={`p-2 rounded transition-colors ${
-        isActive
-          ? "bg-gray-200 text-gray-900"
-          : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+        isActive ? "bg-gray-200 text-gray-900" : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
       }`}
     >
       {children}
@@ -793,75 +750,51 @@ export default function TaskEditor({
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
+      {/* ── Header ── */}
       <header className="border-b border-gray-200 bg-white/80 backdrop-blur-sm p-3 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => router.push("/documentation")}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-900"
-            aria-label="Back"
-          >
+          <button onClick={() => router.push("/documentation")} className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-900" aria-label="Back">
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="flex flex-col">
-            <span className="text-xs text-gray-500 font-medium">
-              {moduleName}
-            </span>
+            <span className="text-xs text-gray-500 font-medium">{moduleName}</span>
             <h1 className="text-sm font-semibold text-gray-900">{taskName}</h1>
           </div>
         </div>
-
         <div className="flex items-center gap-3">
           {showSavedToast && (
             <span className="flex items-center gap-1 text-xs text-green-600 font-medium animate-fade-in">
-              <Check className="w-3 h-3" />
-              Saved
+              <Check className="w-3 h-3" /> Saved
             </span>
           )}
           {lastSaved && !showSavedToast && (
             <span className="text-xs text-gray-400">
-              {lastSaved.toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
+              {lastSaved.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
             </span>
           )}
           {hasChanges && !isSaving && (
             <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-              Editing
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Editing
             </span>
           )}
           <button
             onClick={handleSave}
             disabled={isSaving || !hasChanges}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
-              isSaving || !hasChanges
-                ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                : "bg-black text-white hover:bg-gray-800 active:scale-[0.98]"
+              isSaving || !hasChanges ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-black text-white hover:bg-gray-800 active:scale-[0.98]"
             }`}
           >
-            {isSaving ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Save className="w-4 h-4" />
-            )}
-            <span className="hidden sm:inline">
-              {isSaving ? "Saving" : "Save"}
-            </span>
+            {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            <span className="hidden sm:inline">{isSaving ? "Saving" : "Save"}</span>
           </button>
         </div>
       </header>
 
+      {/* ── Editor Area ── */}
       <div className="flex-1 overflow-auto">
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
           <div className="mb-6 pb-4 border-b border-gray-100">
-            <input
-              type="text"
-              value={taskName}
-              readOnly
-              className="w-full text-3xl sm:text-4xl font-bold text-gray-900 placeholder-gray-300 bg-transparent border-none outline-none focus:ring-0 p-0"
-              placeholder="Untitled"
-            />
+            <input type="text" value={taskName} readOnly className="w-full text-3xl sm:text-4xl font-bold text-gray-900 placeholder-gray-300 bg-transparent border-none outline-none focus:ring-0 p-0" placeholder="Untitled" />
             <div className="mt-2 flex items-center gap-2 text-sm text-gray-500">
               <span>{moduleName}</span>
               <span>•</span>
@@ -870,127 +803,37 @@ export default function TaskEditor({
           </div>
 
           <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border border-gray-200 rounded-lg p-1.5 mb-4 flex flex-wrap gap-1 shadow-sm">
-            <ToolbarButton
-              onClick={() =>
-                editor.chain().focus().toggleHeading({ level: 1 }).run()
-              }
-              isActive={editor.isActive("heading", { level: 1 })}
-              title="Heading 1"
-            >
-              <span className="text-sm font-bold">H1</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() =>
-                editor.chain().focus().toggleHeading({ level: 2 }).run()
-              }
-              isActive={editor.isActive("heading", { level: 2 })}
-              title="Heading 2"
-            >
-              <span className="text-sm font-bold">H2</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() =>
-                editor.chain().focus().toggleHeading({ level: 3 }).run()
-              }
-              isActive={editor.isActive("heading", { level: 3 })}
-              title="Heading 3"
-            >
-              <span className="text-sm font-bold">H3</span>
-            </ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} isActive={editor.isActive("heading", { level: 1 })} title="Heading 1"><span className="text-sm font-bold">H1</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} isActive={editor.isActive("heading", { level: 2 })} title="Heading 2"><span className="text-sm font-bold">H2</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} isActive={editor.isActive("heading", { level: 3 })} title="Heading 3"><span className="text-sm font-bold">H3</span></ToolbarButton>
             <div className="w-px bg-gray-200 mx-1" />
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleBold().run()}
-              isActive={editor.isActive("bold")}
-              title="Bold (Ctrl+B)"
-            >
-              <span className="font-bold">B</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleItalic().run()}
-              isActive={editor.isActive("italic")}
-              title="Italic (Ctrl+I)"
-            >
-              <span className="italic">I</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleStrike().run()}
-              isActive={editor.isActive("strike")}
-              title="Strikethrough"
-            >
-              <span className="line-through">S</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleCode().run()}
-              isActive={editor.isActive("code")}
-              title="Code"
-            >
-              <span className="font-mono text-xs">{`</>`}</span>
-            </ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleBold().run()} isActive={editor.isActive("bold")} title="Bold (Ctrl+B)"><span className="font-bold">B</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleItalic().run()} isActive={editor.isActive("italic")} title="Italic (Ctrl+I)"><span className="italic">I</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleStrike().run()} isActive={editor.isActive("strike")} title="Strikethrough"><span className="line-through">S</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleCode().run()} isActive={editor.isActive("code")} title="Code"><span className="font-mono text-xs">{`</>`}</span></ToolbarButton>
             <div className="w-px bg-gray-200 mx-1" />
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleBulletList().run()}
-              isActive={editor.isActive("bulletList")}
-              title="Bullet List"
-            >
-              <span className="text-sm">•</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleOrderedList().run()}
-              isActive={editor.isActive("orderedList")}
-              title="Numbered List"
-            >
-              <span className="text-sm">1.</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleBlockquote().run()}
-              isActive={editor.isActive("blockquote")}
-              title="Quote"
-            >
-              <span className="text-lg leading-none">&ldquo;</span>
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().setHorizontalRule().run()}
-              title="Divider"
-            >
-              <span className="text-sm">—</span>
-            </ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleBulletList().run()} isActive={editor.isActive("bulletList")} title="Bullet List"><span className="text-sm">•</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleOrderedList().run()} isActive={editor.isActive("orderedList")} title="Numbered List"><span className="text-sm">1.</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().toggleBlockquote().run()} isActive={editor.isActive("blockquote")} title="Quote"><span className="text-lg leading-none">&ldquo;</span></ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().setHorizontalRule().run()} title="Divider"><span className="text-sm">—</span></ToolbarButton>
             <div className="w-px bg-gray-200 mx-1" />
 
             <div className="relative" ref={menuRef}>
-              <button
-                type="button"
-                onClick={() => setShowDiagramMenu((v) => !v)}
-                title="Insert Mermaid Diagram (Ctrl+M)"
-                className="p-2 rounded transition-colors text-gray-500 hover:bg-gray-100 hover:text-gray-700 flex items-center gap-1"
-              >
-                <Sparkles className="w-4 h-4 text-purple-500" />
-                <ChevronDown className="w-3 h-3" />
+              <button type="button" onClick={() => setShowDiagramMenu((v) => !v)} title="Insert Mermaid Diagram (Ctrl+M)" className="p-2 rounded transition-colors text-gray-500 hover:bg-gray-100 hover:text-gray-700 flex items-center gap-1">
+                <Sparkles className="w-4 h-4 text-purple-500" /><ChevronDown className="w-3 h-3" />
               </button>
               {showDiagramMenu && (
                 <div className="absolute top-full left-0 mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-50 animate-fade-in">
-                  <button
-                    type="button"
-                    onClick={() => insertMermaidDiagram()}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-purple-50 flex items-center gap-2 transition-colors"
-                  >
-                    <Sparkles className="w-4 h-4 text-purple-400" />
-                    <span className="text-gray-700">Blank Diagram</span>
-                    <kbd className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded font-mono">
-                      Ctrl+M
-                    </kbd>
+                  <button type="button" onClick={() => insertMermaidDiagram()} className="w-full px-3 py-2 text-left text-sm hover:bg-purple-50 flex items-center gap-2 transition-colors">
+                    <Sparkles className="w-4 h-4 text-purple-400" /><span className="text-gray-700">Blank Diagram</span>
+                    <kbd className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded font-mono">Ctrl+M</kbd>
                   </button>
                   <div className="border-t border-gray-100 my-1" />
                   {DIAGRAM_TEMPLATES.map((tpl) => {
                     const Icon = tpl.icon;
                     return (
-                      <button
-                        key={tpl.label}
-                        type="button"
-                        onClick={() => insertMermaidDiagram(tpl.code)}
-                        className="w-full px-3 py-2 text-left text-sm hover:bg-purple-50 flex items-center gap-2 transition-colors"
-                      >
-                        <Icon className="w-4 h-4 text-gray-400" />
-                        <span className="text-gray-700">{tpl.label}</span>
+                      <button key={tpl.label} type="button" onClick={() => insertMermaidDiagram(tpl.code)} className="w-full px-3 py-2 text-left text-sm hover:bg-purple-50 flex items-center gap-2 transition-colors">
+                        <Icon className="w-4 h-4 text-gray-400" /><span className="text-gray-700">{tpl.label}</span>
                       </button>
                     );
                   })}
@@ -999,186 +842,50 @@ export default function TaskEditor({
             </div>
 
             <div className="w-px bg-gray-200 mx-1" />
-            <ToolbarButton
-              onClick={() => editor.chain().focus().undo().run()}
-              title="Undo (Ctrl+Z)"
-            >
-              ↩
-            </ToolbarButton>
-            <ToolbarButton
-              onClick={() => editor.chain().focus().redo().run()}
-              title="Redo (Ctrl+Y)"
-            >
-              ↪
-            </ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().undo().run()} title="Undo (Ctrl+Z)">↩</ToolbarButton>
+            <ToolbarButton onClick={() => editor.chain().focus().redo().run()} title="Redo (Ctrl+Y)">↪</ToolbarButton>
           </div>
 
           <EditorContent editor={editor} />
         </div>
       </div>
 
+      {/* ── Footer ── */}
       <footer className="border-t border-gray-100 bg-white/80 backdrop-blur-sm px-4 py-2 text-xs text-gray-400 flex items-center justify-between">
-        <span>
-          {hasChanges ? "● Unsaved changes" : "✓ All changes saved"}
-        </span>
+        <span>{hasChanges ? "● Unsaved changes" : "✓ All changes saved"}</span>
         <span className="hidden sm:inline">
-          Press{" "}
-          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">
-            Ctrl
-          </kbd>{" "}
-          +{" "}
-          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">
-            S
-          </kbd>{" "}
-          to save ·{" "}
-          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">
-            Ctrl
-          </kbd>{" "}
-          +{" "}
-          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">
-            M
-          </kbd>{" "}
-          for diagram
+          Press <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">S</kbd> to save · <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">M</kbd> for diagram
         </span>
       </footer>
 
       <style jsx global>{`
         @keyframes fade-in {
-          from {
-            opacity: 0;
-            transform: translateY(-4px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: translateY(0); }
         }
-        .animate-fade-in {
-          animation: fade-in 0.2s ease-out;
-        }
-        kbd {
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-            monospace;
-        }
-
-        .notion-prose {
-          --tw-prose-body: #374151;
-          --tw-prose-headings: #111827;
-          --tw-prose-bold: #111827;
-          --tw-prose-bullets: #6b7280;
-          --tw-prose-hr: #e5e7eb;
-          --tw-prose-quotes: #374151;
-          --tw-prose-quote-borders: #e5e7eb;
-          --tw-prose-code: #111827;
-          --tw-prose-pre-bg: #1f2937;
-          --tw-prose-pre-code: #e5e7eb;
-        }
-        .notion-prose > *:first-child {
-          margin-top: 0;
-        }
-        .notion-prose p {
-          margin: 0.25em 0;
-          line-height: 1.75;
-          color: #374151;
-        }
-        .notion-prose p.is-editor-empty:first-child::before {
-          color: #9ca3af;
-          content: attr(data-placeholder);
-          float: left;
-          height: 0;
-          pointer-events: none;
-        }
-        .notion-prose h1 {
-          font-size: 1.875rem;
-          font-weight: 700;
-          margin: 1.5em 0 0.5em;
-          color: #111827;
-          line-height: 1.3;
-        }
-        .notion-prose h2 {
-          font-size: 1.5rem;
-          font-weight: 600;
-          margin: 1.25em 0 0.5em;
-          color: #111827;
-          line-height: 1.4;
-        }
-        .notion-prose h3 {
-          font-size: 1.25rem;
-          font-weight: 600;
-          margin: 1em 0 0.5em;
-          color: #111827;
-          line-height: 1.5;
-        }
-        .notion-prose ul,
-        .notion-prose ol {
-          margin: 0.5em 0;
-          padding-left: 1.5em;
-        }
-        .notion-prose li {
-          margin: 0.25em 0;
-          padding-left: 0.25em;
-        }
-        .notion-prose li > p {
-          margin: 0;
-          display: inline;
-        }
-        .notion-prose blockquote {
-          margin: 1em 0;
-          padding: 0.25em 0 0.25em 1em;
-          border-left: 3px solid #e5e7eb;
-          color: #4b5563;
-          font-style: normal;
-        }
-        .notion-prose code {
-          background: #f3f4f6;
-          color: #111827;
-          padding: 0.2em 0.4em;
-          border-radius: 0.25rem;
-          font-size: 0.875em;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-            monospace;
-        }
-        .notion-prose pre {
-          margin: 1em 0;
-          background: #1f2937;
-          border-radius: 0.5rem;
-          padding: 1em;
-          overflow-x: auto;
-        }
-        .notion-prose pre code {
-          background: transparent;
-          color: #e5e7eb;
-          padding: 0;
-          font-size: 0.875em;
-        }
-        .notion-prose hr {
-          margin: 2em 0;
-          border: none;
-          border-top: 1px solid #e5e7eb;
-        }
-        .notion-prose a {
-          color: #2563eb;
-          text-decoration: none;
-          font-weight: 500;
-        }
-        .notion-prose a:hover {
-          text-decoration: underline;
-        }
-        .ProseMirror-focused {
-          outline: none;
-        }
-        .ProseMirror-selectednode {
-          outline: 2px solid #3b82f6;
-          outline-offset: 2px;
-          border-radius: 0.25rem;
-        }
-
-        .mermaid-node .ProseMirror-focused {
-          outline: none;
-        }
-        .mermaid-node .ProseMirror-selectednode {
-          outline: none;
-        }
+        .animate-fade-in { animation: fade-in 0.2s ease-out; }
+        kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+        .notion-prose { --tw-prose-body: #374151; --tw-prose-headings: #111827; --tw-prose-bold: #111827; --tw-prose-bullets: #6b7280; --tw-prose-hr: #e5e7eb; --tw-prose-quotes: #374151; --tw-prose-quote-borders: #e5e7eb; --tw-prose-code: #111827; --tw-prose-pre-bg: #1f2937; --tw-prose-pre-code: #e5e7eb; }
+        .notion-prose > *:first-child { margin-top: 0; }
+        .notion-prose p { margin: 0.25em 0; line-height: 1.75; color: #374151; }
+        .notion-prose p.is-editor-empty:first-child::before { color: #9ca3af; content: attr(data-placeholder); float: left; height: 0; pointer-events: none; }
+        .notion-prose h1 { font-size: 1.875rem; font-weight: 700; margin: 1.5em 0 0.5em; color: #111827; line-height: 1.3; }
+        .notion-prose h2 { font-size: 1.5rem; font-weight: 600; margin: 1.25em 0 0.5em; color: #111827; line-height: 1.4; }
+        .notion-prose h3 { font-size: 1.25rem; font-weight: 600; margin: 1em 0 0.5em; color: #111827; line-height: 1.5; }
+        .notion-prose ul, .notion-prose ol { margin: 0.5em 0; padding-left: 1.5em; }
+        .notion-prose li { margin: 0.25em 0; padding-left: 0.25em; }
+        .notion-prose li > p { margin: 0; display: inline; }
+        .notion-prose blockquote { margin: 1em 0; padding: 0.25em 0 0.25em 1em; border-left: 3px solid #e5e7eb; color: #4b5563; font-style: normal; }
+        .notion-prose code { background: #f3f4f6; color: #111827; padding: 0.2em 0.4em; border-radius: 0.25rem; font-size: 0.875em; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+        .notion-prose pre { margin: 1em 0; background: #1f2937; border-radius: 0.5rem; padding: 1em; overflow-x: auto; }
+        .notion-prose pre code { background: transparent; color: #e5e7eb; padding: 0; font-size: 0.875em; }
+        .notion-prose hr { margin: 2em 0; border: none; border-top: 1px solid #e5e7eb; }
+        .notion-prose a { color: #2563eb; text-decoration: none; font-weight: 500; }
+        .notion-prose a:hover { text-decoration: underline; }
+        .ProseMirror-focused { outline: none; }
+        .ProseMirror-selectednode { outline: 2px solid #3b82f6; outline-offset: 2px; border-radius: 0.25rem; }
+        .mermaid-node .ProseMirror-focused { outline: none; }
+        .mermaid-node .ProseMirror-selectednode { outline: none; }
       `}</style>
     </div>
   );

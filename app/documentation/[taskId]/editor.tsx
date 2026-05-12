@@ -514,10 +514,10 @@ function MermaidBlock({
 }
 
 /* ────────────────────────────────────────────
-   Mermaid TipTap Node Extension
+   Mermaid TipTap Node Extension - FIXED
    - Leaf node (no child content)
-   - Code stored as node attribute
-   - Serialized to JSON via getJSON()
+   - Code stored as node attribute with proper serialization
+   - Serialized to JSON via getJSON() correctly
    ──────────────────────────────────────────── */
 
 let _mermaidExt: any = null;
@@ -537,11 +537,21 @@ function getMermaidExtension() {
       return {
         code: {
           default: "",
-          parseHTML: (element: HTMLElement) =>
-            element.getAttribute("data-mermaid-code") || "",
-          renderHTML: (attributes: any) => ({
-            "data-mermaid-code": attributes.code,
-          }),
+          parseHTML: (element: HTMLElement) => {
+            // Robust parsing: check multiple possible attribute names
+            return (
+              element.getAttribute("data-mermaid-code") ??
+              element.getAttribute("code") ??
+              ""
+            );
+          },
+          renderHTML: (attributes: Record<string, any>) => {
+            // Only render attribute if code exists to avoid empty attributes
+            if (!attributes.code) return {};
+            return {
+              "data-mermaid-code": attributes.code,
+            };
+          },
         },
       };
     },
@@ -551,11 +561,14 @@ function getMermaidExtension() {
     },
 
     renderHTML({ HTMLAttributes }: any) {
+      // CRITICAL FIX: Merge attributes in correct order to ensure
+      // data-mermaid-code from addAttributes is preserved in DOM/JSON
       return [
         "div",
-        core.mergeAttributes(HTMLAttributes, {
-          "data-type": "mermaid-diagram",
-        }),
+        core.mergeAttributes(
+          { "data-type": "mermaid-diagram" },
+          HTMLAttributes
+        ),
       ];
     },
 

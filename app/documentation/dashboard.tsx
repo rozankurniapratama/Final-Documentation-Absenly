@@ -1,46 +1,34 @@
-// app/documentation/dashboard.tsx
 "use client";
 
-import { useState, useMemo, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import {
-  ChevronDown,
-  ChevronRight,
-  Search,
-  CheckCircle2,
-  FolderCode,
-  FileText,
-  Code,
-  BookOpen,
-  LogOut,
-  Pencil,
-  Trash2,
-  X,
-  Check,
-  AlertTriangle,
-  Plus,
-  FolderPlus,
-  FilePlus,
-  Download,
-  Loader2,
-} from "lucide-react";
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   toggleTaskAction,
-  logoutAction,
   updateTaskAction,
-  updateModuleAction,
   deleteTaskAction,
+  updateModuleAction,
   deleteModuleAction,
   createModuleAction,
   createTaskAction,
+  saveDocumentationAction,
+  getDocumentationAction,
+  logoutAction,
 } from "./actions";
 
-// Types
+/* ───────────────────── Types ───────────────────── */
+
 interface Task {
   id: string;
   name: string;
   task_order: number;
   is_completed: boolean;
+  module_id: string;
+  updated_at: string;
 }
 
 interface Module {
@@ -50,168 +38,304 @@ interface Module {
   tasks: Task[];
 }
 
-interface DocumentationDashboardProps {
-  modules: Module[];
+interface Stroke {
+  color: string;
+  width: number;
+  points: { x: number; y: number }[];
 }
 
-// Helper functions
-const getTaskIcon = (name: string) => {
-  if (name.includes("Technical")) return <Code className="w-4 h-4" />;
-  if (name.includes("API")) return <FileText className="w-4 h-4" />;
-  if (name.includes("User")) return <BookOpen className="w-4 h-4" />;
-  return <FileText className="w-4 h-4" />;
-};
+interface DrawingData {
+  strokes: Stroke[];
+}
 
-const getTaskColor = (order: number) => {
-  switch (order) {
-    case 1: return "bg-[#a8d5ff]";
-    case 2: return "bg-[#ffd60a]";
-    case 3: return "bg-[#4ade80]";
-    default: return "bg-white";
-  }
-};
+type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-type FilterOption = "all" | "incomplete" | "complete";
+/* ───────────────────── Color Palette ───────────────────── */
 
-// PDF Export Utility Functions
-const generateModulePdfBlob = async (
-  module: Module,
-  allModules: Module[],
-  jsPDF: any,
-  html2canvas: any
-): Promise<Blob | null> => {
-  try {
-    // Buat container temporary untuk render module saja
-    const tempContainer = document.createElement('div');
-    tempContainer.style.position = 'absolute';
-    tempContainer.style.left = '-9999px';
-    tempContainer.style.width = '800px';
-    tempContainer.style.background = '#ffffff';
-    tempContainer.style.padding = '40px';
-    tempContainer.style.fontFamily = 'system-ui, -apple-system, sans-serif';
-    tempContainer.style.color = '#1a1a1a';
-    document.body.appendChild(tempContainer);
+const PRESET_COLORS = [
+  "#2a231c",
+  "#b54c47",
+  "#b08542",
+  "#4a7c59",
+  "#3d6b99",
+  "#7b5ea7",
+  "#c4703a",
+  "#5a5a5a",
+];
 
-    // Generate HTML content untuk module ini saja
-    const moduleContent = `
-      <div style="text-align: center; padding: 40px 20px; margin-bottom: 30px; page-break-after: always;">
-        <h1 style="font-size: 28px; font-weight: bold; margin-bottom: 10px; color: #1a1a1a;">
-          ${module.name}
-        </h1>
-        <p style="color: #666; font-size: 14px;">
-          Documentation Module
-        </p>
-        <div style="display: flex; justify-content: center; gap: 15px; margin-top: 20px;">
-          <span style="background: #f3f4f6; padding: 6px 12px; border-radius: 4px; font-size: 12px;">
-            ${module.tasks.length} Tasks
-          </span>
-          <span style="background: #f3f4f6; padding: 6px 12px; border-radius: 4px; font-size: 12px;">
-            Generated: ${new Date().toLocaleDateString('id-ID')}
-          </span>
-        </div>
-      </div>
-      <div style="page-break-after: always;"></div>
-      ${module.tasks.map((task, idx) => `
-        <div style="margin-bottom: 30px; page-break-inside: avoid;">
-          <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
-            ${idx + 1}. ${task.name}
-          </h3>
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-            <span style="background: ${getTaskColor(task.task_order)}; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 500;">
-              ${task.task_order === 1 ? 'Technical' : task.task_order === 2 ? 'API' : 'User Guide'}
-            </span>
-            ${task.is_completed ? '<span style="color: #22c55e; font-size: 12px;">✓ Completed</span>' : ''}
-          </div>
-        </div>
-      `).join('')}
-    `;
+const BRUSH_SIZES = [2, 4, 8, 14, 24];
 
-    tempContainer.innerHTML = moduleContent;
-    
-    // Wait untuk resources load
-    await new Promise(resolve => setTimeout(resolve, 100));
+/* ───────────────────── Main Component ───────────────────── */
 
-    // Convert ke canvas
-    const canvas = await html2canvas(tempContainer, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      backgroundColor: '#ffffff',
-    });
-
-    // Cleanup
-    document.body.removeChild(tempContainer);
-
-    // Setup jsPDF
-    const pdf = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4'
-    });
-
-    const imgWidth = 210;
-    const pageHeight = 297;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    let heightLeft = imgHeight;
-    let position = 0;
-
-    // Add pages
-    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-
-    while (heightLeft > 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-    }
-
-    // Return blob
-    return pdf.output('blob');
-
-  } catch (error) {
-    console.error('Error generating module PDF:', error);
-    return null;
-  }
-};
-
-export default function DocumentationDashboard({
-  modules: initialModules,
-}: DocumentationDashboardProps) {
-  const router = useRouter();
-  const contentRef = useRef<HTMLDivElement>(null);
-  const [modules, setModules] = useState(initialModules);
-  const [expandedModules, setExpandedModules] = useState<Set<string>>(
-    new Set([initialModules[0]?.id])
+export function DocumentationApp({
+  initialModules,
+}: {
+  initialModules: Module[];
+}) {
+  const [modules, setModules] = useState<Module[]>(initialModules);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [expandedModuleIds, setExpandedModuleIds] = useState<Set<string>>(
+    () => new Set(initialModules.map((m) => m.id))
   );
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filter, setFilter] = useState<FilterOption>("all");
-  const [updatingTasks, setUpdatingTasks] = useState<Set<string>>(new Set());
-  const [updatingModules, setUpdatingModules] = useState<Set<string>>(new Set());
 
-  // Edit/Delete state
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [editTaskValue, setEditTaskValue] = useState("");
-  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  /* ── Text state ── */
+  const [textContent, setTextContent] = useState("");
+  const textSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  /* ── Drawing state ── */
+  const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const [currentStroke, setCurrentStroke] = useState<Stroke | null>(null);
+  const [drawingHistory, setDrawingHistory] = useState<Stroke[][]>([]);
+  const [activeTool, setActiveTool] = useState<"pen" | "eraser">("pen");
+  const [penColor, setPenColor] = useState("#2a231c");
+  const [brushSize, setBrushSize] = useState(4);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const isDrawingRef = useRef(false);
+  const drawSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  /* ── UI state ── */
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [editingModuleId, setEditingModuleId] = useState<string | null>(null);
-  const [editModuleValue, setEditModuleValue] = useState("");
-  const [deletingModuleId, setDeletingModuleId] = useState<string | null>(null);
-
-  // Create state
-  const [creatingModule, setCreatingModule] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [moduleDraftName, setModuleDraftName] = useState("");
+  const [taskDraftName, setTaskDraftName] = useState("");
   const [newModuleName, setNewModuleName] = useState("");
-  const [creatingTaskForModule, setCreatingTaskForModule] = useState<string | null>(null);
-  const [newTaskName, setNewTaskName] = useState("");
-  const [creatingTasks, setCreatingTasks] = useState<Set<string>>(new Set());
+  const [newTaskNames, setNewTaskNames] = useState<Record<string, string>>({});
+  const [showNewTaskInput, setShowNewTaskInput] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    type: "module" | "task";
+    id: string;
+    name: string;
+  } | null>(null);
 
-  // PDF Export state - UPDATED
-  const [exportingPdf, setExportingPdf] = useState(false);
-  const [showExportModal, setShowExportModal] = useState(false);
-  const [selectedModulesForExport, setSelectedModulesForExport] = useState<Set<string>>(new Set());
-  const [exportProgress, setExportProgress] = useState<{ current: number; total: number; moduleName: string } | null>(null);
+  /* ── Derived ── */
+  const selectedTask = useMemo(() => {
+    for (const m of modules) {
+      const t = m.tasks.find((t) => t.id === selectedTaskId);
+      if (t) return t;
+    }
+    return null;
+  }, [modules, selectedTaskId]);
+
+  const selectedModuleName = useMemo(() => {
+    if (!selectedTask) return "";
+    const m = modules.find((m) => m.id === selectedTask.module_id);
+    return m?.name || "";
+  }, [modules, selectedTask]);
+
+  /* ═══════════════════════ Canvas ═══════════════════════ */
+
+  const getCanvasPoint = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return { x: 0, y: 0 };
+      const rect = canvas.getBoundingClientRect();
+      const clientX = "touches" in e ? e.touches[0]?.clientX ?? e.changedTouches[0]?.clientX : e.clientX;
+      const clientY = "touches" in e ? e.touches[0]?.clientY ?? e.changedTouches[0]?.clientY : e.clientY;
+      return {
+        x: ((clientX - rect.left) / rect.width) * canvas.width,
+        y: ((clientY - rect.top) / rect.height) * canvas.height,
+      };
+    },
+    []
+  );
+
+  const renderCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const allStrokes = currentStroke ? [...strokes, currentStroke] : strokes;
+
+    for (const stroke of allStrokes) {
+      if (stroke.points.length < 2) continue;
+
+      ctx.beginPath();
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.width;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      const pts = stroke.points;
+      ctx.moveTo(pts[0].x, pts[0].y);
+
+      if (pts.length === 2) {
+        ctx.lineTo(pts[1].x, pts[1].y);
+      } else {
+        for (let i = 1; i < pts.length - 1; i++) {
+          const midX = (pts[i].x + pts[i + 1].x) / 2;
+          const midY = (pts[i].y + pts[i + 1].y) / 2;
+          ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+        }
+        const last = pts[pts.length - 1];
+        ctx.lineTo(last.x, last.y);
+      }
+
+      ctx.stroke();
+    }
+  }, [strokes, currentStroke]);
+
+  useEffect(() => {
+    renderCanvas();
+  }, [renderCanvas]);
+
+  /* Size canvas on mount */
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const resize = () => {
+      const rect = canvas.parentElement?.getBoundingClientRect();
+      if (!rect) return;
+      canvas.width = rect.width;
+      canvas.height = 400;
+      renderCanvas();
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [renderCanvas]);
+
+  /* ── Canvas pointer handlers ── */
+
+  const handlePointerDown = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+      e.preventDefault();
+      isDrawingRef.current = true;
+      const point = getCanvasPoint(e);
+      setCurrentStroke({
+        color: activeTool === "eraser" ? "#ffffff" : penColor,
+        width: activeTool === "eraser" ? brushSize * 3 : brushSize,
+        points: [point],
+      });
+    },
+    [activeTool, penColor, brushSize, getCanvasPoint]
+  );
+
+  const handlePointerMove = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+      if (!isDrawingRef.current) return;
+      e.preventDefault();
+      const point = getCanvasPoint(e);
+      setCurrentStroke((prev) =>
+        prev ? { ...prev, points: [...prev.points, point] } : null
+      );
+    },
+    [getCanvasPoint]
+  );
+
+  const handlePointerUp = useCallback(() => {
+    if (!isDrawingRef.current) return;
+    isDrawingRef.current = false;
+
+    setCurrentStroke((prev) => {
+      if (prev && prev.points.length >= 2) {
+        setStrokes((s) => [...s, prev]);
+        setDrawingHistory((h) => [...h, strokes]);
+      }
+      return null;
+    });
+  }, [strokes]);
+
+  /* ── Canvas actions ── */
+
+  const undoCanvas = useCallback(() => {
+    if (drawingHistory.length === 0) return;
+    const prev = drawingHistory[drawingHistory.length - 1];
+    setStrokes(prev);
+    setDrawingHistory((h) => h.slice(0, -1));
+  }, [drawingHistory]);
+
+  const clearCanvas = useCallback(() => {
+    setDrawingHistory((h) => [...h, strokes]);
+    setStrokes([]);
+  }, [strokes]);
+
+  /* ═══════════════════════ Data Loading ═══════════════════════ */
+
+  const loadDocumentation = useCallback(async (taskId: string) => {
+    setSaveStatus("idle");
+    const result = await getDocumentationAction(taskId);
+    if (!result.error) {
+      setTextContent((result.textContent as any)?.text || "");
+      setStrokes((result.drawingContent as any)?.strokes || []);
+      setDrawingHistory([]);
+    }
+  }, []);
+
+  /* ═══════════════════════ Auto-Save ═══════════════════════ */
+
+  const saveDocumentation = useCallback(
+    async (taskId: string, text: string, currentStrokes: Stroke[]) => {
+      setSaveStatus("saving");
+      const result = await saveDocumentationAction(
+        taskId,
+        { text },
+        { strokes: currentStrokes }
+      );
+      setSaveStatus(result.error ? "error" : "saved");
+      setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 2000);
+    },
+    []
+  );
+
+  /* Text auto-save (debounced) */
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    if (textSaveTimerRef.current) clearTimeout(textSaveTimerRef.current);
+    textSaveTimerRef.current = setTimeout(() => {
+      saveDocumentation(selectedTaskId, textContent, strokes);
+    }, 1200);
+    return () => {
+      if (textSaveTimerRef.current) clearTimeout(textSaveTimerRef.current);
+    };
+  }, [textContent, selectedTaskId, saveDocumentation]);
+
+  /* Drawing auto-save on stroke completion */
+  useEffect(() => {
+    if (!selectedTaskId || strokes.length === 0) return;
+    if (drawSaveTimerRef.current) clearTimeout(drawSaveTimerRef.current);
+    drawSaveTimerRef.current = setTimeout(() => {
+      saveDocumentation(selectedTaskId, textContent, strokes);
+    }, 800);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strokes]);
+
+  /* ═══════════════════════ Keyboard Shortcuts ═══════════════════════ */
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        if (selectedTaskId) {
+          saveDocumentation(selectedTaskId, textContent, strokes);
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [selectedTaskId, textContent, strokes, saveDocumentation]);
+
+  /* ═══════════════════════ Task Selection ═══════════════════════ */
+
+  const selectTask = useCallback(
+    (taskId: string) => {
+      if (taskId === selectedTaskId) return;
+      setSelectedTaskId(taskId);
+      setTextContent("");
+      setStrokes([]);
+      setDrawingHistory([]);
+      loadDocumentation(taskId);
+    },
+    [selectedTaskId, loadDocumentation]
+  );
+
+  /* ═══════════════════════ Module Handlers ═══════════════════════ */
 
   const toggleModule = (moduleId: string) => {
-    setExpandedModules((prev) => {
+    setExpandedModuleIds((prev) => {
       const next = new Set(prev);
       if (next.has(moduleId)) next.delete(moduleId);
       else next.add(moduleId);
@@ -219,1009 +343,1354 @@ export default function DocumentationDashboard({
     });
   };
 
-  const handleToggleTask = async (
-    e: React.MouseEvent,
-    moduleId: string,
-    taskId: string,
-    currentState: boolean
-  ) => {
-    e.stopPropagation();
-    setUpdatingTasks((prev) => new Set(prev).add(taskId));
-
-    setModules((prev) =>
-      prev.map((module) =>
-        module.id === moduleId
-          ? {
-              ...module,
-              tasks: module.tasks.map((task) =>
-                task.id === taskId ? { ...task, is_completed: !currentState } : task
-              ),
-            }
-          : module
-      )
-    );
-
-    const result = await toggleTaskAction(taskId, !currentState);
-    if (result.error) {
-      setModules((prev) =>
-        prev.map((module) =>
-          module.id === moduleId
-            ? {
-                ...module,
-                tasks: module.tasks.map((task) =>
-                  task.id === taskId ? { ...task, is_completed: currentState } : task
-                ),
-              }
-            : module
-        )
-      );
-    }
-    setUpdatingTasks((prev) => {
-      const next = new Set(prev);
-      next.delete(taskId);
-      return next;
-    });
+  const startEditModule = (m: Module) => {
+    setEditingModuleId(m.id);
+    setModuleDraftName(m.name);
   };
 
-  const openTaskEditor = (taskId: string) => {
-    router.push(`/documentation/${taskId}`);
-  };
-
-  const toggleAllModules = (expand: boolean) => {
-    setExpandedModules(expand ? new Set(modules.map((m) => m.id)) : new Set());
-  };
-
-  const handleLogout = async () => {
-    await logoutAction();
-    router.push("/login");
-  };
-
-  // ==================== TASK CRUD ====================
-  const handleEditTaskStart = (task: Task, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditingTaskId(task.id);
-    setEditTaskValue(task.name);
-  };
-
-  const handleEditTaskSave = async (taskId: string, moduleId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!editTaskValue.trim()) return;
-
-    setUpdatingTasks((prev) => new Set(prev).add(taskId));
-    setModules((prev) =>
-      prev.map((module) =>
-        module.id === moduleId
-          ? {
-              ...module,
-              tasks: module.tasks.map((task) =>
-                task.id === taskId ? { ...task, name: editTaskValue.trim() } : task
-              ),
-            }
-          : module
-      )
-    );
-
-    const result = await updateTaskAction(taskId, { name: editTaskValue.trim() });
-    if (result.error) {
-      setModules((prev) =>
-        prev.map((module) =>
-          module.id === moduleId
-            ? {
-                ...module,
-                tasks: module.tasks.map((task) =>
-                  task.id === taskId ? { ...task, name: editTaskValue } : task
-                ),
-              }
-            : module
-        )
-      );
-      alert("Failed to update task: " + result.error);
-    }
-    setEditingTaskId(null);
-    setUpdatingTasks((prev) => {
-      const next = new Set(prev);
-      next.delete(taskId);
-      return next;
-    });
-  };
-
-  const handleEditTaskCancel = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditingTaskId(null);
-  };
-
-  const handleEditTaskKeyPress = (e: React.KeyboardEvent, taskId: string, moduleId: string) => {
-    if (e.key === "Enter") handleEditTaskSave(taskId, moduleId, e as unknown as React.MouseEvent);
-    else if (e.key === "Escape") handleEditTaskCancel(e as unknown as React.MouseEvent);
-  };
-
-  const handleDeleteTask = async (e: React.MouseEvent, moduleId: string, taskId: string) => {
-    e.stopPropagation();
-    if (!confirm("Are you sure you want to delete this task?")) return;
-
-    setDeletingTaskId(taskId);
-    setUpdatingTasks((prev) => new Set(prev).add(taskId));
-
-    setModules((prev) =>
-      prev.map((module) =>
-        module.id === moduleId
-          ? { ...module, tasks: module.tasks.filter((t) => t.id !== taskId) }
-          : module
-      )
-    );
-
-    const result = await deleteTaskAction(taskId);
-    if (result.error) {
-      alert("Failed to delete task: " + result.error);
-      router.refresh();
-    }
-    setDeletingTaskId(null);
-    setUpdatingTasks((prev) => {
-      const next = new Set(prev);
-      next.delete(taskId);
-      return next;
-    });
-  };
-
-  const handleCreateTaskStart = (moduleId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setCreatingTaskForModule(moduleId);
-    setNewTaskName("");
-  };
-
-  const handleCreateTaskSave = async (moduleId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!newTaskName.trim()) return;
-
-    setCreatingTasks((prev) => new Set(prev).add(moduleId));
-    const module = modules.find((m) => m.id === moduleId);
-    const nextOrder = module ? module.tasks.length + 1 : 1;
-
-    setModules((prev) =>
-      prev.map((m) =>
-        m.id === moduleId
-          ? {
-              ...m,
-              tasks: [
-                ...m.tasks,
-                {
-                  id: `temp-${Date.now()}`,
-                  name: newTaskName.trim(),
-                  task_order: nextOrder,
-                  is_completed: false,
-                },
-              ],
-            }
-          : m
-      )
-    );
-
-    const result = await createTaskAction(moduleId, {
-      name: newTaskName.trim(),
-      task_order: nextOrder,
-    });
-
-    if (result.error) {
-      alert("Failed to create task: " + result.error);
-      router.refresh();
+  const commitEditModule = async () => {
+    if (!editingModuleId || !moduleDraftName.trim()) {
+      setEditingModuleId(null);
       return;
     }
-
-    if (result.data?.id) {
+    const result = await updateModuleAction(editingModuleId, moduleDraftName.trim());
+    if (!result.error) {
       setModules((prev) =>
         prev.map((m) =>
-          m.id === moduleId
-            ? {
-                ...m,
-                tasks: m.tasks.map((t) =>
-                  t.id.startsWith("temp-") && t.name === newTaskName.trim()
-                    ? { ...t, id: result.data!.id }
-                    : t
-                ),
-              }
-            : m
+          m.id === editingModuleId ? { ...m, name: moduleDraftName.trim() } : m
         )
       );
     }
-
-    setCreatingTaskForModule(null);
-    setNewTaskName("");
-    setCreatingTasks((prev) => {
-      const next = new Set(prev);
-      next.delete(moduleId);
-      return next;
-    });
-    router.refresh();
-  };
-
-  const handleCreateTaskCancel = () => {
-    setCreatingTaskForModule(null);
-    setNewTaskName("");
-  };
-
-  const handleCreateTaskKeyPress = (e: React.KeyboardEvent, moduleId: string) => {
-    if (e.key === "Enter") handleCreateTaskSave(moduleId, e as unknown as React.MouseEvent);
-    else if (e.key === "Escape") handleCreateTaskCancel();
-  };
-
-  // ==================== MODULE CRUD ====================
-  const handleEditModuleStart = (module: Module, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditingModuleId(module.id);
-    setEditModuleValue(module.name);
-  };
-
-  const handleEditModuleSave = async (moduleId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!editModuleValue.trim()) return;
-
-    setUpdatingModules((prev) => new Set(prev).add(moduleId));
-    setModules((prev) =>
-      prev.map((module) =>
-        module.id === moduleId ? { ...module, name: editModuleValue.trim() } : module
-      )
-    );
-
-    const result = await updateModuleAction(moduleId, editModuleValue.trim());
-    if (result.error) {
-      setModules((prev) =>
-        prev.map((module) =>
-          module.id === moduleId ? { ...module, name: editModuleValue } : module
-        )
-      );
-      alert("Failed to update module: " + result.error);
-    }
-    setEditingModuleId(null);
-    setUpdatingModules((prev) => {
-      const next = new Set(prev);
-      next.delete(moduleId);
-      return next;
-    });
-  };
-
-  const handleEditModuleCancel = (e: React.MouseEvent) => {
-    e.stopPropagation();
     setEditingModuleId(null);
   };
 
-  const handleEditModuleKeyPress = (e: React.KeyboardEvent, moduleId: string) => {
-    if (e.key === "Enter") handleEditModuleSave(moduleId, e as unknown as React.MouseEvent);
-    else if (e.key === "Escape") handleEditModuleCancel(e as unknown as React.MouseEvent);
-  };
-
-  const handleDeleteModule = async (e: React.MouseEvent, moduleId: string, taskCount: number) => {
-    e.stopPropagation();
-    const message = taskCount > 0
-      ? `Are you sure? This will delete the module and all ${taskCount} task(s) inside.`
-      : "Are you sure you want to delete this module?";
-
-    if (!confirm(message)) return;
-
-    setDeletingModuleId(moduleId);
-    setUpdatingModules((prev) => new Set(prev).add(moduleId));
-    setModules((prev) => prev.filter((m) => m.id !== moduleId));
-
-    const result = await deleteModuleAction(moduleId);
-    if (result.error) {
-      alert("Failed to delete module: " + result.error);
-      router.refresh();
-    }
-    setDeletingModuleId(null);
-    setUpdatingModules((prev) => {
-      const next = new Set(prev);
-      next.delete(moduleId);
-      return next;
-    });
-  };
-
-  const handleCreateModuleStart = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setCreatingModule(true);
-    setNewModuleName("");
-  };
-
-  const handleCreateModuleSave = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleCreateModule = async () => {
     if (!newModuleName.trim()) return;
-
-    setModules((prev) => [
-      ...prev,
-      {
-        id: `temp-${Date.now()}`,
-        name: newModuleName.trim(),
-        display_order: prev.length + 1,
-        tasks: [],
-      },
-    ]);
-
     const result = await createModuleAction(newModuleName.trim());
+    if (result.data && !result.error) {
+      setModules((prev) => [
+        ...prev,
+        {
+          id: result.data!.id,
+          name: newModuleName.trim(),
+          display_order: prev.length + 1,
+          tasks: [],
+        },
+      ]);
+      setNewModuleName("");
+      setExpandedModuleIds((prev) => new Set([...prev, result.data!.id]));
+    }
+  };
 
-    if (result.error) {
-      alert("Failed to create module: " + result.error);
-      router.refresh();
+  const handleDeleteModule = async () => {
+    if (!deleteConfirm || deleteConfirm.type !== "module") return;
+    const result = await deleteModuleAction(deleteConfirm.id);
+    if (!result.error) {
+      setModules((prev) => prev.filter((m) => m.id !== deleteConfirm.id));
+      if (
+        selectedTask &&
+        modules.find((m) => m.id === deleteConfirm.id)?.tasks.some((t) => t.id === selectedTask.id)
+      ) {
+        setSelectedTaskId(null);
+      }
+    }
+    setDeleteConfirm(null);
+  };
+
+  /* ═══════════════════════ Task Handlers ═══════════════════════ */
+
+  const handleToggleTask = async (taskId: string, completed: boolean) => {
+    const result = await toggleTaskAction(taskId, completed);
+    if (!result.error) {
+      setModules((prev) =>
+        prev.map((m) => ({
+          ...m,
+          tasks: m.tasks.map((t) =>
+            t.id === taskId ? { ...t, is_completed: completed } : t
+          ),
+        }))
+      );
+    }
+  };
+
+  const startEditTask = (t: Task) => {
+    setEditingTaskId(t.id);
+    setTaskDraftName(t.name);
+  };
+
+  const commitEditTask = async () => {
+    if (!editingTaskId || !taskDraftName.trim()) {
+      setEditingTaskId(null);
       return;
     }
+    const result = await updateTaskAction(editingTaskId, { name: taskDraftName.trim() });
+    if (!result.error) {
+      setModules((prev) =>
+        prev.map((m) => ({
+          ...m,
+          tasks: m.tasks.map((t) =>
+            t.id === editingTaskId ? { ...t, name: taskDraftName.trim() } : t
+          ),
+        }))
+      );
+    }
+    setEditingTaskId(null);
+  };
 
-    if (result.data?.id) {
+  const handleCreateTask = async (moduleId: string) => {
+    const name = newTaskNames[moduleId]?.trim();
+    if (!name) return;
+    const moduleTasks = modules.find((m) => m.id === moduleId)?.tasks || [];
+    const result = await createTaskAction(moduleId, {
+      name,
+      task_order: moduleTasks.length + 1,
+    });
+    if (result.data && !result.error) {
+      const newTask: Task = {
+        id: result.data.id,
+        name,
+        task_order: moduleTasks.length + 1,
+        is_completed: false,
+        module_id: moduleId,
+        updated_at: new Date().toISOString(),
+      };
       setModules((prev) =>
         prev.map((m) =>
-          m.id.startsWith("temp-") && m.name === newModuleName.trim()
-            ? { ...m, id: result.data!.id }
-            : m
+          m.id === moduleId ? { ...m, tasks: [...m.tasks, newTask] } : m
         )
       );
-    }
-
-    setCreatingModule(false);
-    setNewModuleName("");
-    router.refresh();
-  };
-
-  const handleCreateModuleCancel = () => {
-    setCreatingModule(false);
-    setNewModuleName("");
-  };
-
-  const handleCreateModuleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") handleCreateModuleSave(e as unknown as React.MouseEvent);
-    else if (e.key === "Escape") handleCreateModuleCancel();
-  };
-
-  // ==================== PDF EXPORT - UPDATED ====================
-  
-  // Export ALL modules (original behavior - kept for backward compatibility)
-  const handleExportAllPdf = async () => {
-    setExportingPdf(true);
-    try {
-      const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
-        import("jspdf"),
-        import("html2canvas"),
-      ]);
-
-      const element = contentRef.current;
-      if (!element) throw new Error("Content ref not found");
-
-      const wasExpanded = new Set(expandedModules);
-      setExpandedModules(new Set(modules.map((m) => m.id)));
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      const canvas = await html2canvas(element, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#ffffff",
-      });
-
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF({
-        orientation: "portrait",
-        unit: "mm",
-        format: "a4",
-      });
-
-      const imgWidth = 210;
-      const pageHeight = 297;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      let heightLeft = imgHeight;
-      let position = 0;
-
-      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-
-      while (heightLeft >= 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
-      }
-
-      pdf.save(`odoo-documentation-${new Date().toISOString().split("T")[0]}.pdf`);
-      setExpandedModules(wasExpanded);
-    } catch (err) {
-      console.error("PDF export error:", err);
-      alert("Failed to export PDF. Please try again.");
-    } finally {
-      setExportingPdf(false);
+      setNewTaskNames((prev) => ({ ...prev, [moduleId]: "" }));
+      setShowNewTaskInput(null);
+      setExpandedModuleIds((prev) => new Set([...prev, moduleId]));
     }
   };
 
-  // ✅ NEW: Export selected modules as separate PDFs
-  const handleExportSelectedModulesPdf = async () => {
-    if (selectedModulesForExport.size === 0) return;
-    
-    setExportingPdf(true);
-    setExportProgress({ current: 0, total: selectedModulesForExport.size, moduleName: '' });
-    
-    try {
-      const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
-        import("jspdf"),
-        import("html2canvas"),
-      ]);
-
-      const selectedModules = modules.filter(m => selectedModulesForExport.has(m.id));
-      
-      for (let i = 0; i < selectedModules.length; i++) {
-        const module = selectedModules[i];
-        
-        // Update progress
-        setExportProgress({ 
-          current: i + 1, 
-          total: selectedModules.length, 
-          moduleName: module.name 
-        });
-
-        // Generate PDF for this module
-        const blob = await generateModulePdfBlob(module, modules, jsPDF, html2canvas);
-        
-        if (blob) {
-          // Trigger download
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = `${module.name.replace(/\s+/g, '_')}_documentation.pdf`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          URL.revokeObjectURL(url);
-        }
-
-        // Small delay to prevent browser freeze
-        if (i < selectedModules.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 300));
-        }
-      }
-
-      // Show success message
-      alert(`Successfully exported ${selectedModules.length} PDF file(s)!`);
-      
-    } catch (err) {
-      console.error("PDF export error:", err);
-      alert("Failed to export PDF. Please try again.");
-    } finally {
-      setExportingPdf(false);
-      setExportProgress(null);
-      setShowExportModal(false);
-      setSelectedModulesForExport(new Set());
-    }
-  };
-
-  // Toggle module selection for export
-  const toggleModuleForExport = (moduleId: string) => {
-    setSelectedModulesForExport((prev) => {
-      const next = new Set(prev);
-      if (next.has(moduleId)) {
-        next.delete(moduleId);
-      } else {
-        next.add(moduleId);
-      }
-      return next;
-    });
-  };
-
-  // Select/Deselect all modules
-  const toggleSelectAllModules = () => {
-    if (selectedModulesForExport.size === modules.length) {
-      setSelectedModulesForExport(new Set());
-    } else {
-      setSelectedModulesForExport(new Set(modules.map(m => m.id)));
-    }
-  };
-
-  // ==================== FILTER & STATS ====================
-  const filteredModules = useMemo(() => {
-    return modules
-      .map((module) => {
-        const filteredTasks = module.tasks.filter((task) => {
-          const matchesSearch =
-            searchQuery === "" ||
-            task.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            module.name.toLowerCase().includes(searchQuery.toLowerCase());
-          const matchesFilter =
-            filter === "all" ||
-            (filter === "complete" && task.is_completed) ||
-            (filter === "incomplete" && !task.is_completed);
-          return matchesSearch && matchesFilter;
-        });
-        return { ...module, filteredTasks };
-      })
-      .filter(
-        (module) =>
-          module.filteredTasks.length > 0 ||
-          (searchQuery !== "" && module.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  const handleDeleteTask = async () => {
+    if (!deleteConfirm || deleteConfirm.type !== "task") return;
+    const result = await deleteTaskAction(deleteConfirm.id);
+    if (!result.error) {
+      setModules((prev) =>
+        prev.map((m) => ({
+          ...m,
+          tasks: m.tasks.filter((t) => t.id !== deleteConfirm.id),
+        }))
       );
-  }, [modules, searchQuery, filter]);
+      if (selectedTaskId === deleteConfirm.id) setSelectedTaskId(null);
+    }
+    setDeleteConfirm(null);
+  };
 
-  const stats = useMemo(() => {
-    const totalTasks = modules.reduce((acc, m) => acc + m.tasks.length, 0);
-    const completedTasks = modules.reduce(
-      (acc, m) => acc + m.tasks.filter((t) => t.is_completed).length,
-      0
-    );
-    const totalModules = modules.length;
-    const completedModules = modules.filter((m) =>
-      m.tasks.every((t) => t.is_completed)
-    ).length;
-    return { totalTasks, completedTasks, totalModules, completedModules };
-  }, [modules]);
+  /* ═══════════════════════ Render ═══════════════════════ */
 
   return (
-    <div className="min-h-screen bg-background text-foreground font-mono">
-      {/* Header */}
-      <header className="border-b-2 border-border bg-card p-4 sticky top-0 z-40">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <FolderCode className="w-6 h-6 text-primary" />
-            <h1 className="text-xl font-bold">Odoo Documentation</h1>
+    <div className="doc-layout">
+      {/* ── Sidebar ── */}
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-brand">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <rect x="2" y="2" width="16" height="16" rx="3" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M6 7h8M6 10h6M6 13h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <span>Documentation</span>
           </div>
-          <div className="flex items-center gap-2">
-            {/* Export Dropdown */}
-            <div className="relative">
-              <button
-                onClick={() => setShowExportModal(true)}
-                disabled={exportingPdf || modules.length === 0}
-                className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground brutal-border rounded hover:bg-primary/90 transition-colors disabled:opacity-50"
-              >
-                {exportingPdf ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Download className="w-4 h-4" />
-                )}
-                Export PDF
-              </button>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="p-2 hover:bg-secondary brutal-border rounded transition-colors"
-              title="Logout"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content - Exportable Area */}
-      <main ref={contentRef} className="max-w-6xl mx-auto p-4">
-        {/* Stats & Filters */}
-        <div className="flex flex-wrap gap-4 mb-6 items-center justify-between">
-          <div className="flex gap-4 text-sm">
-            <span className="flex items-center gap-1">
-              <FolderCode className="w-4 h-4" />
-              {stats.completedModules}/{stats.totalModules} Modules
-            </span>
-            <span className="flex items-center gap-1">
-              <CheckCircle2 className="w-4 h-4 text-[#4ade80]" />
-              {stats.completedTasks}/{stats.totalTasks} Tasks
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => toggleAllModules(true)}
-              className="px-3 py-1 text-sm brutal-border hover:bg-secondary rounded"
-            >
-              Expand All
-            </button>
-            <button
-              onClick={() => toggleAllModules(false)}
-              className="px-3 py-1 text-sm brutal-border hover:bg-secondary rounded"
-            >
-              Collapse All
-            </button>
-          </div>
-        </div>
-
-        {/* Search & Filter */}
-        <div className="flex flex-wrap gap-4 mb-6">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <input
-              type="text"
-              placeholder="Search modules or tasks..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 brutal-border bg-background rounded focus:ring-2 focus:ring-primary outline-none"
-            />
-          </div>
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value as FilterOption)}
-            className="px-4 py-2 brutal-border bg-background rounded focus:ring-2 focus:ring-primary outline-none"
+          <form
+            action={async () => {
+              await logoutAction();
+              window.location.href = "/login";
+            }}
           >
-            <option value="all">All Tasks</option>
-            <option value="incomplete">Incomplete</option>
-            <option value="complete">Completed</option>
-          </select>
+            <button type="submit" className="logout-btn" title="Sign out">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M6 14H3.33C2.6 14 2 13.4 2 12.67V3.33C2 2.6 2.6 2 3.33 2H6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                <path d="M10.67 11.33L14 8l-3.33-3.33M14 8H6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </form>
         </div>
 
-        {/* Modules List */}
-        {filteredModules.length === 0 ? (
-          <div className="text-center py-12 text-muted-foreground">
-            <AlertTriangle className="w-12 h-12 mx-auto mb-4 opacity-50" />
-            <p>No modules match your search</p>
-          </div>
-        ) : (
-          filteredModules.map((module) => {
-            const moduleProgress = module.tasks.filter((t) => t.is_completed).length;
-            const isComplete = moduleProgress === module.tasks.length;
-            const isExpanded = expandedModules.has(module.id);
-            const isEditingModule = editingModuleId === module.id;
-            const isUpdatingModule = updatingModules.has(module.id);
-            const isDeletingModule = deletingModuleId === module.id;
-            const isCreatingTask = creatingTaskForModule === module.id;
-            const isSelectedForExport = selectedModulesForExport.has(module.id);
-
-            return (
+        <div className="sidebar-modules">
+          {modules.map((mod) => (
+            <div key={mod.id} className="module-group">
               <div
-                key={module.id}
-                className="mb-4 brutal-border rounded-lg overflow-hidden bg-card"
+                className="module-header"
+                onClick={() => toggleModule(mod.id)}
               >
-                {/* Module Header */}
-                <div
-                  onClick={() => !isEditingModule && toggleModule(module.id)}
-                  className="p-4 flex items-center gap-3 cursor-pointer hover:bg-secondary/50 transition-colors"
+                <svg
+                  className={`module-chevron ${expandedModuleIds.has(mod.id) ? "expanded" : ""}`}
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
                 >
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleModule(module.id);
+                  <path
+                    d="M5 3l4 4-4 4"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+
+                {editingModuleId === mod.id ? (
+                  <input
+                    autoFocus
+                    className="inline-edit"
+                    value={moduleDraftName}
+                    onChange={(e) => setModuleDraftName(e.target.value)}
+                    onBlur={commitEditModule}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitEditModule();
+                      if (e.key === "Escape") setEditingModuleId(null);
                     }}
-                    className="flex-shrink-0"
-                    disabled={isEditingModule || isDeletingModule}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <span className="module-name">{mod.name}</span>
+                )}
+
+                <div className="module-actions" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="icon-btn-sm"
+                    onClick={() => startEditModule(mod)}
+                    title="Rename"
                   >
-                    {isExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path d="M8.5 1.5l2 2L4 10H2v-2l6.5-6.5z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
                   </button>
-
-                  {isEditingModule ? (
-                    <div className="flex items-center gap-2 flex-1">
-                      <input
-                        type="text"
-                        value={editModuleValue}
-                        onChange={(e) => setEditModuleValue(e.target.value)}
-                        onKeyDown={(e) => handleEditModuleKeyPress(e, module.id)}
-                        onClick={(e) => e.stopPropagation()}
-                        autoFocus
-                        disabled={isUpdatingModule}
-                        className="flex-1 px-2 py-1 brutal-border bg-background font-mono font-bold text-lg outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                      />
-                      <button
-                        onClick={(e) => handleEditModuleSave(module.id, e)}
-                        className="p-1 hover:bg-[#4ade80] brutal-border transition-colors disabled:opacity-50"
-                        title="Save"
-                        disabled={isUpdatingModule}
-                      >
-                        <Check className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={handleEditModuleCancel}
-                        className="p-1 hover:bg-destructive brutal-border transition-colors"
-                        title="Cancel"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-2 flex-1">
-                      <FolderCode className="w-5 h-5 text-muted-foreground" />
-                      <span className="font-mono font-bold text-lg">{module.name}</span>
-                    </div>
-                  )}
-
-                  {!isEditingModule && !isDeletingModule && !creatingModule && (
-                    <>
-                      <button
-                        onClick={(e) => handleEditModuleStart(module, e)}
-                        disabled={isUpdatingModule}
-                        className="p-2 hover:bg-[#a8d5ff] brutal-border transition-colors disabled:opacity-50"
-                        title="Edit module name"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={(e) => handleDeleteModule(e, module.id, module.tasks.length)}
-                        disabled={isUpdatingModule}
-                        className="p-2 hover:bg-destructive brutal-border transition-colors disabled:opacity-50"
-                        title="Delete module"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </>
-                  )}
-                  {isDeletingModule && (
-                    <span className="text-destructive text-sm font-medium">Deleting...</span>
-                  )}
-
-                  <div className="flex items-center gap-2 ml-auto">
-                    <span className="text-sm text-muted-foreground">
-                      {moduleProgress}/{module.tasks.length}
-                    </span>
-                    {isComplete && <CheckCircle2 className="w-5 h-5 text-[#4ade80]" />}
-                  </div>
+                  <button
+                    className="icon-btn-sm danger"
+                    onClick={() =>
+                      setDeleteConfirm({ type: "module", id: mod.id, name: mod.name })
+                    }
+                    title="Delete module"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path d="M2 3h8M4.5 3V2a1 1 0 011-1h1a1 1 0 011 1v1M3 3l.5 7a1 1 0 001 1h3a1 1 0 001-1L9 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
                 </div>
+              </div>
 
-                {/* Tasks */}
-                {isExpanded && (
-                  <div className="border-t-2 border-border">
-                    {isCreatingTask && (
-                      <div className="p-4 flex items-center gap-2 border-b-2 border-border bg-secondary/30">
+              {expandedModuleIds.has(mod.id) && (
+                <div className="task-list">
+                  {mod.tasks.map((task) => (
+                    <div
+                      key={task.id}
+                      className={`task-item ${selectedTaskId === task.id ? "selected" : ""} ${task.is_completed ? "completed" : ""}`}
+                      onClick={() => selectTask(task.id)}
+                    >
+                      <button
+                        className="task-checkbox"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleToggleTask(task.id, !task.is_completed);
+                        }}
+                      >
+                        {task.is_completed ? (
+                          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                            <rect x="1" y="1" width="12" height="12" rx="3" fill="var(--success)" />
+                            <path d="M4 7l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                            <rect x="1" y="1" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.2" />
+                          </svg>
+                        )}
+                      </button>
+
+                      {editingTaskId === task.id ? (
                         <input
-                          type="text"
-                          value={newTaskName}
-                          onChange={(e) => setNewTaskName(e.target.value)}
-                          onKeyDown={(e) => handleCreateTaskKeyPress(e, module.id)}
-                          onClick={(e) => e.stopPropagation()}
-                          placeholder="New task name..."
                           autoFocus
-                          className="flex-1 px-3 py-2 brutal-border bg-background font-medium outline-none focus:ring-2 focus:ring-primary"
+                          className="inline-edit small"
+                          value={taskDraftName}
+                          onChange={(e) => setTaskDraftName(e.target.value)}
+                          onBlur={commitEditTask}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commitEditTask();
+                            if (e.key === "Escape") setEditingTaskId(null);
+                          }}
+                          onClick={(e) => e.stopPropagation()}
                         />
+                      ) : (
+                        <span className="task-name">{task.name}</span>
+                      )}
+
+                      <div className="task-actions" onClick={(e) => e.stopPropagation()}>
                         <button
-                          onClick={(e) => handleCreateTaskSave(module.id, e)}
-                          className="p-2 hover:bg-[#4ade80] brutal-border transition-colors"
-                          title="Save task"
+                          className="icon-btn-xs"
+                          onClick={() => startEditTask(task)}
+                          title="Rename"
                         >
-                          <Check className="w-4 h-4" />
+                          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                            <path d="M8.5 1.5l2 2L4 10H2v-2l6.5-6.5z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
                         </button>
                         <button
-                          onClick={handleCreateTaskCancel}
-                          className="p-2 hover:bg-destructive brutal-border transition-colors"
-                          title="Cancel"
+                          className="icon-btn-xs danger"
+                          onClick={() =>
+                            setDeleteConfirm({ type: "task", id: task.id, name: task.name })
+                          }
+                          title="Delete task"
                         >
-                          <X className="w-4 h-4" />
+                          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                            <path d="M2 3h8M4.5 3V2a1 1 0 011-1h1a1 1 0 011 1v1M3 3l.5 7a1 1 0 001 1h3a1 1 0 001-1L9 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
                         </button>
                       </div>
-                    )}
-                    {(module.filteredTasks || module.tasks).map((task) => {
-                      const isEditingTask = editingTaskId === task.id;
-                      const isDeletingTask = deletingTaskId === task.id;
-                      const isUpdatingTask = updatingTasks.has(task.id);
+                    </div>
+                  ))}
 
-                      return (
-                        <div
-                          key={task.id}
-                          onClick={() => !isEditingTask && openTaskEditor(task.id)}
-                          className={`p-4 border-b-2 border-border last:border-b-0 flex items-center gap-4 transition-all ${
-                            task.is_completed ? "bg-[#4ade80]/10" : "hover:bg-secondary/50"
-                          } ${isUpdatingTask ? "opacity-60" : ""}`}
-                        >
-                          <button
-                            onClick={(e) => handleToggleTask(e, module.id, task.id, task.is_completed)}
-                            disabled={isUpdatingTask}
-                            className={`w-6 h-6 brutal-border flex-shrink-0 flex items-center justify-center transition-all ${
-                              task.is_completed
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-card hover:bg-accent"
-                            } ${isUpdatingTask ? "cursor-not-allowed" : ""}`}
-                          >
-                            {task.is_completed && <Check className="w-4 h-4" />}
-                          </button>
+                  {showNewTaskInput === mod.id ? (
+                    <div className="new-task-row">
+                      <input
+                        autoFocus
+                        className="new-task-input"
+                        placeholder="Task name..."
+                        value={newTaskNames[mod.id] || ""}
+                        onChange={(e) =>
+                          setNewTaskNames((prev) => ({ ...prev, [mod.id]: e.target.value }))
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleCreateTask(mod.id);
+                          if (e.key === "Escape") setShowNewTaskInput(null);
+                        }}
+                        onBlur={() => {
+                          if (!newTaskNames[mod.id]?.trim()) setShowNewTaskInput(null);
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <button
+                      className="add-task-btn"
+                      onClick={() => {
+                        setShowNewTaskInput(mod.id);
+                        setExpandedModuleIds((prev) => new Set([...prev, mod.id]));
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                      </svg>
+                      Add task
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
 
-                          <div className="flex items-center gap-2">
-                            {getTaskIcon(task.name)}
-                            <span className="text-xs font-medium px-2 py-0.5 rounded bg-[#a8d5ff]/50">
-                              {task.task_order === 1 ? "Tech" : task.task_order === 2 ? "API" : "Guide"}
-                            </span>
-                          </div>
-
-                          {isEditingTask ? (
-                            <div className="flex items-center gap-2 flex-1">
-                              <input
-                                type="text"
-                                value={editTaskValue}
-                                onChange={(e) => setEditTaskValue(e.target.value)}
-                                onKeyDown={(e) => handleEditTaskKeyPress(e, task.id, module.id)}
-                                onClick={(e) => e.stopPropagation()}
-                                autoFocus
-                                className="flex-1 px-2 py-1 brutal-border bg-background font-medium outline-none focus:ring-2 focus:ring-primary"
-                              />
-                              <button
-                                onClick={(e) => handleEditTaskSave(task.id, module.id, e)}
-                                className="p-1 hover:bg-[#4ade80] brutal-border transition-colors"
-                                title="Save"
-                              >
-                                <Check className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={handleEditTaskCancel}
-                                className="p-1 hover:bg-destructive brutal-border transition-colors"
-                                title="Cancel"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="font-medium flex-1">{task.name}</span>
-                          )}
-
-                          {!isEditingTask && !isDeletingTask && (
-                            <>
-                              <button
-                                onClick={(e) => handleEditTaskStart(task, e)}
-                                disabled={isUpdatingTask}
-                                className="p-2 hover:bg-[#a8d5ff] brutal-border transition-colors disabled:opacity-50"
-                                title="Edit task name"
-                              >
-                                <Pencil className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={(e) => handleDeleteTask(e, module.id, task.id)}
-                                disabled={isUpdatingTask}
-                                className="p-2 hover:bg-destructive brutal-border transition-colors disabled:opacity-50"
-                                title="Delete task"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </>
-                          )}
-                          {isDeletingTask && <span className="text-destructive text-sm">Deleting...</span>}
-
-                          {!isEditingTask && (
-                            <span className="text-xs text-muted-foreground ml-2">
-                              Click to edit
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {!isCreatingTask && (
-                      <button
-                        onClick={(e) => handleCreateTaskStart(module.id, e)}
-                        disabled={creatingTasks.has(module.id)}
-                        className="w-full p-4 border-t-2 border-border flex items-center justify-center gap-2 text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors disabled:opacity-50"
-                      >
-                        <Plus className="w-4 h-4" />
-                        Add Task
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
-
-        {/* Create Module Section */}
-        {creatingModule ? (
-          <div className="p-4 brutal-border rounded-lg bg-secondary/30 flex items-center gap-2">
-            <FolderPlus className="w-5 h-5 text-muted-foreground" />
+        <div className="sidebar-footer">
+          <div className="new-module-row">
             <input
-              type="text"
+              className="new-module-input"
+              placeholder="New module..."
               value={newModuleName}
               onChange={(e) => setNewModuleName(e.target.value)}
-              onKeyDown={handleCreateModuleKeyPress}
-              onClick={(e) => e.stopPropagation()}
-              placeholder="New module name..."
-              autoFocus
-              className="flex-1 px-3 py-2 brutal-border bg-background font-mono font-bold outline-none focus:ring-2 focus:ring-primary"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleCreateModule();
+              }}
             />
             <button
-              onClick={handleCreateModuleSave}
-              className="px-4 py-2 bg-primary text-primary-foreground brutal-border rounded hover:bg-primary/90 transition-colors"
+              className="add-module-btn"
+              onClick={handleCreateModule}
+              disabled={!newModuleName.trim()}
             >
-              Create
-            </button>
-            <button
-              onClick={handleCreateModuleCancel}
-              className="px-4 py-2 brutal-border hover:bg-secondary rounded transition-colors"
-            >
-              Cancel
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M7 3v8M3 7h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
             </button>
           </div>
+        </div>
+      </aside>
+
+      {/* ── Main Content ── */}
+      <main className="main-content">
+        {!selectedTask ? (
+          <div className="empty-state">
+            <div className="empty-icon">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <rect x="8" y="6" width="32" height="36" rx="4" stroke="currentColor" strokeWidth="2" />
+                <path d="M16 16h16M16 22h12M16 28h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </div>
+            <h2>Select a task to begin</h2>
+            <p>Choose a task from the sidebar to view or edit its documentation.</p>
+          </div>
         ) : (
-          <button
-            onClick={handleCreateModuleStart}
-            className="w-full p-4 mt-4 brutal-border rounded-lg border-dashed hover:bg-secondary/50 transition-colors flex items-center justify-center gap-2 text-muted-foreground hover:text-foreground"
-          >
-            <FolderPlus className="w-5 h-5" />
-            + Add New Module
-          </button>
+          <div className="editor-area">
+            {/* ── Editor Header ── */}
+            <div className="editor-header">
+              <div className="editor-breadcrumb">
+                <span className="breadcrumb-module">{selectedModuleName}</span>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <span className="breadcrumb-task">{selectedTask.name}</span>
+              </div>
+
+              <div className="editor-meta">
+                <button
+                  className={`toggle-btn ${selectedTask.is_completed ? "active" : ""}`}
+                  onClick={() =>
+                    handleToggleTask(selectedTask.id, !selectedTask.is_completed)
+                  }
+                >
+                  {selectedTask.is_completed ? (
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <rect x="1" y="1" width="12" height="12" rx="3" fill="var(--success)" />
+                      <path d="M4 7l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <rect x="1" y="1" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.2" />
+                    </svg>
+                  )}
+                  {selectedTask.is_completed ? "Completed" : "Mark complete"}
+                </button>
+
+                <div className={`save-indicator ${saveStatus}`}>
+                  {saveStatus === "saving" && (
+                    <>
+                      <span className="save-dot" /> Saving...
+                    </>
+                  )}
+                  {saveStatus === "saved" && (
+                    <>
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <path d="M3 7.5l3 3 5-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      Saved
+                    </>
+                  )}
+                  {saveStatus === "error" && "Save failed"}
+                </div>
+              </div>
+            </div>
+
+            {/* ── Text Editor ── */}
+            <section className="editor-section">
+              <div className="section-label">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2 3h10M2 7h7M2 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                </svg>
+                Notes
+              </div>
+              <textarea
+                className="text-editor"
+                value={textContent}
+                onChange={(e) => setTextContent(e.target.value)}
+                placeholder="Start writing your documentation..."
+              />
+            </section>
+
+            {/* ── Drawing Canvas ── */}
+            <section className="editor-section">
+              <div className="section-label">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2 12l1.5-4L11 1.5a1 1 0 011.4 0l.1.1a1 1 0 010 1.4L7.5 8.5 2 12z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Diagram
+              </div>
+
+              <div className="canvas-toolbar">
+                <div className="tool-group">
+                  <button
+                    className={`tool-btn ${activeTool === "pen" ? "active" : ""}`}
+                    onClick={() => setActiveTool("pen")}
+                    title="Pen"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                      <path d="M11 2l3 3L5 14H2v-3L11 2z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                  <button
+                    className={`tool-btn ${activeTool === "eraser" ? "active" : ""}`}
+                    onClick={() => setActiveTool("eraser")}
+                    title="Eraser"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                      <path d="M6 14h7M2.5 10.5l5-5 3.5 3.5-5 5L2.5 10.5z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M2.5 10.5l3-8 4.5 2-3 8-4.5-2z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div className="divider-v" />
+
+                <div className="tool-group colors">
+                  {PRESET_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      className={`color-dot ${penColor === c ? "active" : ""}`}
+                      style={{ backgroundColor: c }}
+                      onClick={() => {
+                        setPenColor(c);
+                        setActiveTool("pen");
+                      }}
+                    />
+                  ))}
+                </div>
+
+                <div className="divider-v" />
+
+                <div className="tool-group sizes">
+                  {BRUSH_SIZES.map((s) => (
+                    <button
+                      key={s}
+                      className={`size-btn ${brushSize === s ? "active" : ""}`}
+                      onClick={() => setBrushSize(s)}
+                    >
+                      <span
+                        className="size-dot"
+                        style={{ width: Math.max(s, 3), height: Math.max(s, 3) }}
+                      />
+                    </button>
+                  ))}
+                </div>
+
+                <div className="tool-spacer" />
+
+                <div className="tool-group">
+                  <button className="tool-btn" onClick={undoCanvas} title="Undo">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                      <path d="M3 6h6a3 3 0 010 6H8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M6 3L3 6l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                  <button className="tool-btn danger" onClick={clearCanvas} title="Clear canvas">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                      <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <div className="canvas-wrapper">
+                <canvas
+                  ref={canvasRef}
+                  className="drawing-canvas"
+                  onMouseDown={handlePointerDown}
+                  onMouseMove={handlePointerMove}
+                  onMouseUp={handlePointerUp}
+                  onMouseLeave={handlePointerUp}
+                  onTouchStart={handlePointerDown}
+                  onTouchMove={handlePointerMove}
+                  onTouchEnd={handlePointerUp}
+                />
+              </div>
+            </section>
+          </div>
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="border-t-2 border-border p-4 text-center text-sm text-muted-foreground">
-        <p>© {new Date().getFullYear()} TiLabs Documentation System</p>
-      </footer>
-
-      {/* ✅ Export PDF Modal - NEW */}
-      {showExportModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-background brutal-border rounded-lg p-6 w-full max-w-md shadow-2xl">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-lg flex items-center gap-2">
-                <Download className="w-5 h-5" />
-                Export PDF per Folder
-              </h3>
-              <button 
-                onClick={() => {
-                  setShowExportModal(false);
-                  setSelectedModulesForExport(new Set());
-                }}
-                className="p-1 hover:bg-secondary brutal-border rounded transition-colors"
-                disabled={exportingPdf}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            
-            <p className="text-sm text-muted-foreground mb-4">
-              Pilih folder yang ingin di-export. Setiap folder akan menghasilkan 1 file PDF terpisah.
+      {/* ── Delete Confirmation Modal ── */}
+      {deleteConfirm && (
+        <div className="modal-overlay" onClick={() => setDeleteConfirm(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete {deleteConfirm.type}?</h3>
+            <p>
+              This will permanently delete{" "}
+              <strong>&ldquo;{deleteConfirm.name}&rdquo;</strong>
+              {deleteConfirm.type === "module" && " and all its tasks and documentation"}.
+              This action cannot be undone.
             </p>
-            
-            {/* Select All */}
-            <button
-              onClick={toggleSelectAllModules}
-              className="w-full text-left px-3 py-2 mb-2 text-sm brutal-border rounded hover:bg-secondary/50 transition-colors flex items-center justify-between"
-              disabled={exportingPdf}
-            >
-              <span className="font-medium">
-                {selectedModulesForExport.size === modules.length ? 'Deselect All' : 'Select All'}
-              </span>
-              <span className="text-muted-foreground">
-                {modules.length} folders
-              </span>
-            </button>
-            
-            {/* Module List */}
-            <div className="max-h-64 overflow-y-auto space-y-2 mb-4">
-              {modules.map((module) => (
-                <label 
-                  key={module.id}
-                  className="flex items-center gap-3 p-3 brutal-border rounded cursor-pointer hover:bg-secondary/50 transition-colors"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedModulesForExport.has(module.id)}
-                    onChange={() => toggleModuleForExport(module.id)}
-                    className="w-4 h-4 accent-primary"
-                    disabled={exportingPdf}
-                  />
-                  <FolderCode className="w-4 h-4 text-muted-foreground" />
-                  <span className="font-medium flex-1">{module.name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {module.tasks.length} tasks
-                  </span>
-                </label>
-              ))}
-            </div>
-            
-            {/* Progress */}
-            {exportProgress && (
-              <div className="mb-4 p-3 bg-secondary/30 brutal-border rounded">
-                <div className="flex items-center gap-2 text-sm">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>
-                    Exporting: {exportProgress.moduleName} ({exportProgress.current}/{exportProgress.total})
-                  </span>
-                </div>
-              </div>
-            )}
-            
-            {/* Actions */}
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => {
-                  setShowExportModal(false);
-                  setSelectedModulesForExport(new Set());
-                }}
-                disabled={exportingPdf}
-                className="px-4 py-2 brutal-border hover:bg-secondary rounded font-medium transition-colors disabled:opacity-50"
-              >
-                Batal
+            <div className="modal-actions">
+              <button className="btn-ghost" onClick={() => setDeleteConfirm(null)}>
+                Cancel
               </button>
               <button
-                onClick={handleExportSelectedModulesPdf}
-                disabled={selectedModulesForExport.size === 0 || exportingPdf}
-                className="px-4 py-2 bg-primary text-primary-foreground brutal-border rounded font-medium disabled:opacity-50 flex items-center gap-2 transition-colors"
+                className="btn-danger"
+                onClick={
+                  deleteConfirm.type === "module" ? handleDeleteModule : handleDeleteTask
+                }
               >
-                {exportingPdf ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Download className="w-4 h-4" />
-                )}
-                Export {selectedModulesForExport.size} PDF
+                Delete
               </button>
             </div>
           </div>
         </div>
       )}
+
+      <style jsx>{`
+        /* ══════════════════════════════════════════════════
+           DESIGN TOKENS
+           ══════════════════════════════════════════════════ */
+        :global(*) {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+
+        :global(body) {
+          font-family: "Source Serif 4", "Georgia", serif;
+          background: var(--bg);
+          color: var(--text-primary);
+          -webkit-font-smoothing: antialiased;
+        }
+
+        :global(:root) {
+          --bg: #f5f0e8;
+          --sidebar-bg: #1e1a16;
+          --sidebar-hover: #2a2520;
+          --sidebar-text: #a89e92;
+          --sidebar-text-active: #f5f0e8;
+          --surface: #ffffff;
+          --surface-hover: #faf8f3;
+          --accent: #b08542;
+          --accent-hover: #96722f;
+          --accent-bg: rgba(176, 133, 66, 0.08);
+          --text-primary: #2a231c;
+          --text-secondary: #6b5f52;
+          --text-muted: #9c9084;
+          --border: #e5ddd3;
+          --border-light: #ede7dd;
+          --success: #4a7c59;
+          --success-bg: rgba(74, 124, 89, 0.08);
+          --danger: #b54c47;
+          --danger-bg: rgba(181, 76, 71, 0.06);
+          --shadow-sm: 0 1px 2px rgba(42, 35, 28, 0.06);
+          --shadow-md: 0 4px 12px rgba(42, 35, 28, 0.08);
+          --radius-sm: 6px;
+          --radius-md: 8px;
+          --radius-lg: 12px;
+        }
+
+        /* ══════════════════════════════════════════════════
+           LAYOUT
+           ══════════════════════════════════════════════════ */
+        .doc-layout {
+          display: grid;
+          grid-template-columns: 272px 1fr;
+          height: 100vh;
+          overflow: hidden;
+        }
+
+        /* ══════════════════════════════════════════════════
+           SIDEBAR
+           ══════════════════════════════════════════════════ */
+        .sidebar {
+          background: var(--sidebar-bg);
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+
+        .sidebar-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 16px 16px 12px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .sidebar-brand {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: var(--sidebar-text-active);
+          font-family: "Playfair Display", serif;
+          font-size: 15px;
+          font-weight: 600;
+          letter-spacing: -0.01em;
+        }
+
+        .sidebar-brand svg {
+          opacity: 0.6;
+        }
+
+        .logout-btn {
+          background: none;
+          border: none;
+          color: var(--sidebar-text);
+          cursor: pointer;
+          padding: 4px;
+          border-radius: var(--radius-sm);
+          display: flex;
+          align-items: center;
+          transition: all 0.15s ease;
+        }
+        .logout-btn:hover {
+          color: var(--sidebar-text-active);
+          background: rgba(255, 255, 255, 0.06);
+        }
+
+        .sidebar-modules {
+          flex: 1;
+          overflow-y: auto;
+          padding: 8px 0;
+        }
+
+        .sidebar-modules::-webkit-scrollbar {
+          width: 4px;
+        }
+        .sidebar-modules::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.1);
+          border-radius: 2px;
+        }
+
+        /* Module group */
+        .module-group {
+          margin-bottom: 2px;
+        }
+
+        .module-header {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 8px 12px;
+          color: var(--sidebar-text);
+          cursor: pointer;
+          user-select: none;
+          transition: all 0.12s ease;
+          min-height: 36px;
+        }
+        .module-header:hover {
+          background: var(--sidebar-hover);
+          color: var(--sidebar-text-active);
+        }
+
+        .module-chevron {
+          flex-shrink: 0;
+          transition: transform 0.2s ease;
+          opacity: 0.4;
+        }
+        .module-chevron.expanded {
+          transform: rotate(90deg);
+        }
+
+        .module-name {
+          flex: 1;
+          font-size: 13px;
+          font-weight: 500;
+          letter-spacing: 0.02em;
+          text-transform: uppercase;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .module-actions {
+          display: none;
+          align-items: center;
+          gap: 2px;
+        }
+        .module-header:hover .module-actions {
+          display: flex;
+        }
+        .module-header:hover .module-chevron {
+          opacity: 0;
+        }
+
+        /* Task list */
+        .task-list {
+          padding: 0 0 4px 0;
+          animation: slideDown 0.15s ease;
+        }
+
+        @keyframes slideDown {
+          from {
+            opacity: 0;
+            transform: translateY(-4px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        .task-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 6px 12px 6px 30px;
+          color: var(--sidebar-text);
+          cursor: pointer;
+          transition: all 0.12s ease;
+          font-size: 13px;
+        }
+        .task-item:hover {
+          background: var(--sidebar-hover);
+          color: var(--sidebar-text-active);
+        }
+        .task-item.selected {
+          background: rgba(176, 133, 66, 0.12);
+          color: var(--sidebar-text-active);
+        }
+        .task-item.completed .task-name {
+          text-decoration: line-through;
+          opacity: 0.5;
+        }
+
+        .task-checkbox {
+          background: none;
+          border: none;
+          color: inherit;
+          cursor: pointer;
+          padding: 0;
+          display: flex;
+          flex-shrink: 0;
+          line-height: 0;
+        }
+
+        .task-name {
+          flex: 1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .task-actions {
+          display: none;
+          align-items: center;
+          gap: 2px;
+        }
+        .task-item:hover .task-actions {
+          display: flex;
+        }
+
+        .icon-btn-sm,
+        .icon-btn-xs {
+          background: none;
+          border: none;
+          color: inherit;
+          cursor: pointer;
+          padding: 3px;
+          border-radius: 3px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.12s ease;
+        }
+        .icon-btn-sm:hover,
+        .icon-btn-xs:hover {
+          background: rgba(255, 255, 255, 0.08);
+        }
+        .icon-btn-sm.danger:hover,
+        .icon-btn-xs.danger:hover {
+          color: #e8746e;
+          background: rgba(232, 116, 110, 0.1);
+        }
+
+        /* Add task button */
+        .add-task-btn {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 5px 12px 5px 34px;
+          background: none;
+          border: none;
+          color: var(--sidebar-text);
+          font-size: 12px;
+          cursor: pointer;
+          opacity: 0;
+          transition: opacity 0.12s ease;
+          font-family: inherit;
+        }
+        .task-list:hover .add-task-btn,
+        .add-task-btn:focus {
+          opacity: 1;
+        }
+        .add-task-btn:hover {
+          color: var(--accent);
+        }
+
+        .new-task-row {
+          padding: 4px 12px 4px 30px;
+        }
+
+        .new-task-input {
+          width: 100%;
+          background: rgba(255, 255, 255, 0.06);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 4px;
+          color: var(--sidebar-text-active);
+          font-size: 12px;
+          padding: 5px 8px;
+          font-family: inherit;
+          outline: none;
+          transition: border-color 0.15s ease;
+        }
+        .new-task-input:focus {
+          border-color: var(--accent);
+        }
+        .new-task-input::placeholder {
+          color: rgba(255, 255, 255, 0.25);
+        }
+
+        /* Sidebar footer */
+        .sidebar-footer {
+          padding: 12px;
+          border-top: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .new-module-row {
+          display: flex;
+          gap: 6px;
+        }
+
+        .new-module-input {
+          flex: 1;
+          background: rgba(255, 255, 255, 0.06);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 4px;
+          color: var(--sidebar-text-active);
+          font-size: 13px;
+          padding: 6px 10px;
+          font-family: inherit;
+          outline: none;
+          transition: border-color 0.15s ease;
+        }
+        .new-module-input:focus {
+          border-color: var(--accent);
+        }
+        .new-module-input::placeholder {
+          color: rgba(255, 255, 255, 0.25);
+        }
+
+        .add-module-btn {
+          background: var(--accent);
+          border: none;
+          color: white;
+          cursor: pointer;
+          padding: 6px 8px;
+          border-radius: 4px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.15s ease;
+        }
+        .add-module-btn:hover:not(:disabled) {
+          background: var(--accent-hover);
+        }
+        .add-module-btn:disabled {
+          opacity: 0.3;
+          cursor: default;
+        }
+
+        /* Inline edit */
+        .inline-edit {
+          flex: 1;
+          background: rgba(255, 255, 255, 0.08);
+          border: 1px solid var(--accent);
+          border-radius: 3px;
+          color: var(--sidebar-text-active);
+          font-size: 13px;
+          padding: 2px 6px;
+          font-family: inherit;
+          font-weight: 500;
+          outline: none;
+          min-width: 0;
+        }
+        .inline-edit.small {
+          font-size: 12px;
+          padding: 1px 4px;
+        }
+
+        /* ══════════════════════════════════════════════════
+           MAIN CONTENT
+           ══════════════════════════════════════════════════ */
+        .main-content {
+          overflow-y: auto;
+          background: var(--bg);
+        }
+
+        /* Empty state */
+        .empty-state {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          height: 100%;
+          color: var(--text-muted);
+          gap: 12px;
+          animation: fadeIn 0.4s ease;
+        }
+        .empty-icon {
+          opacity: 0.25;
+          margin-bottom: 4px;
+        }
+        .empty-state h2 {
+          font-family: "Playfair Display", serif;
+          font-size: 20px;
+          font-weight: 600;
+          color: var(--text-secondary);
+        }
+        .empty-state p {
+          font-size: 14px;
+          max-width: 320px;
+          text-align: center;
+          line-height: 1.5;
+        }
+
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        /* Editor area */
+        .editor-area {
+          max-width: 860px;
+          margin: 0 auto;
+          padding: 32px 40px 80px;
+          animation: fadeIn 0.3s ease;
+        }
+
+        .editor-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 32px;
+          padding-bottom: 16px;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .editor-breadcrumb {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 13px;
+          color: var(--text-muted);
+        }
+        .breadcrumb-module {
+          font-weight: 500;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          font-size: 11px;
+        }
+        .breadcrumb-task {
+          color: var(--text-primary);
+          font-weight: 600;
+        }
+
+        .editor-meta {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+        }
+
+        .toggle-btn {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          background: none;
+          border: 1px solid var(--border);
+          border-radius: var(--radius-sm);
+          padding: 5px 12px;
+          font-size: 12px;
+          font-family: inherit;
+          color: var(--text-secondary);
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+        .toggle-btn:hover {
+          border-color: var(--text-muted);
+        }
+        .toggle-btn.active {
+          background: var(--success-bg);
+          border-color: var(--success);
+          color: var(--success);
+        }
+
+        .save-indicator {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          font-size: 11px;
+          color: var(--text-muted);
+          min-width: 70px;
+          transition: all 0.2s ease;
+        }
+        .save-indicator.saving {
+          color: var(--accent);
+        }
+        .save-indicator.saved {
+          color: var(--success);
+        }
+        .save-indicator.error {
+          color: var(--danger);
+        }
+
+        .save-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: var(--accent);
+          animation: pulse 1s ease infinite;
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+
+        /* Sections */
+        .editor-section {
+          margin-bottom: 28px;
+        }
+
+        .section-label {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 11px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          color: var(--text-muted);
+          margin-bottom: 10px;
+        }
+
+        /* Text editor */
+        .text-editor {
+          width: 100%;
+          min-height: 260px;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: var(--radius-lg);
+          padding: 20px 24px;
+          font-family: "Source Serif 4", Georgia, serif;
+          font-size: 15px;
+          line-height: 1.7;
+          color: var(--text-primary);
+          resize: vertical;
+          outline: none;
+          transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+        .text-editor:focus {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 3px var(--accent-bg);
+        }
+        .text-editor::placeholder {
+          color: var(--text-muted);
+        }
+
+        /* Canvas toolbar */
+        .canvas-toolbar {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 10px;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-bottom: none;
+          border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+          flex-wrap: wrap;
+        }
+
+        .tool-group {
+          display: flex;
+          align-items: center;
+          gap: 3px;
+        }
+
+        .tool-group.colors {
+          gap: 4px;
+        }
+
+        .tool-group.sizes {
+          gap: 2px;
+        }
+
+        .divider-v {
+          width: 1px;
+          height: 20px;
+          background: var(--border);
+          margin: 0 4px;
+        }
+
+        .tool-spacer {
+          flex: 1;
+        }
+
+        .tool-btn {
+          background: none;
+          border: 1px solid transparent;
+          color: var(--text-secondary);
+          cursor: pointer;
+          padding: 5px;
+          border-radius: 4px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.12s ease;
+        }
+        .tool-btn:hover {
+          background: var(--surface-hover);
+          color: var(--text-primary);
+        }
+        .tool-btn.active {
+          background: var(--accent-bg);
+          color: var(--accent);
+          border-color: var(--accent);
+        }
+        .tool-btn.danger:hover {
+          color: var(--danger);
+          background: var(--danger-bg);
+        }
+
+        .color-dot {
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          border: 2px solid transparent;
+          cursor: pointer;
+          transition: all 0.12s ease;
+          padding: 0;
+        }
+        .color-dot:hover {
+          transform: scale(1.2);
+        }
+        .color-dot.active {
+          border-color: var(--text-primary);
+          box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--text-muted);
+        }
+
+        .size-btn {
+          background: none;
+          border: 1px solid transparent;
+          cursor: pointer;
+          padding: 5px 6px;
+          border-radius: 4px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.12s ease;
+        }
+        .size-btn:hover {
+          background: var(--surface-hover);
+        }
+        .size-btn.active {
+          background: var(--accent-bg);
+          border-color: var(--accent);
+        }
+
+        .size-dot {
+          display: block;
+          border-radius: 50%;
+          background: var(--text-primary);
+        }
+
+        /* Canvas */
+        .canvas-wrapper {
+          background: #ffffff;
+          border: 1px solid var(--border);
+          border-top: 1px solid var(--border-light);
+          border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+          overflow: hidden;
+          cursor: crosshair;
+        }
+
+        .drawing-canvas {
+          display: block;
+          width: 100%;
+          height: 400px;
+          touch-action: none;
+        }
+
+        /* ══════════════════════════════════════════════════
+           MODAL
+           ══════════════════════════════════════════════════ */
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(30, 26, 22, 0.4);
+          backdrop-filter: blur(4px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          animation: fadeIn 0.15s ease;
+        }
+
+        .modal {
+          background: var(--surface);
+          border-radius: var(--radius-lg);
+          padding: 28px 32px;
+          max-width: 420px;
+          width: 90%;
+          box-shadow: 0 20px 60px rgba(42, 35, 28, 0.2);
+          animation: modalIn 0.2s ease;
+        }
+
+        @keyframes modalIn {
+          from {
+            opacity: 0;
+            transform: scale(0.96) translateY(8px);
+          }
+          to {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+          }
+        }
+
+        .modal h3 {
+          font-family: "Playfair Display", serif;
+          font-size: 18px;
+          font-weight: 600;
+          margin-bottom: 10px;
+          color: var(--text-primary);
+        }
+
+        .modal p {
+          font-size: 14px;
+          line-height: 1.6;
+          color: var(--text-secondary);
+          margin-bottom: 24px;
+        }
+
+        .modal-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+        }
+
+        .btn-ghost {
+          background: none;
+          border: 1px solid var(--border);
+          border-radius: var(--radius-sm);
+          padding: 8px 16px;
+          font-size: 13px;
+          font-family: inherit;
+          color: var(--text-secondary);
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+        .btn-ghost:hover {
+          background: var(--surface-hover);
+          border-color: var(--text-muted);
+        }
+
+        .btn-danger {
+          background: var(--danger);
+          border: 1px solid var(--danger);
+          border-radius: var(--radius-sm);
+          padding: 8px 16px;
+          font-size: 13px;
+          font-family: inherit;
+          color: white;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+        .btn-danger:hover {
+          background: #943c38;
+        }
+
+        /* ══════════════════════════════════════════════════
+           RESPONSIVE
+           ══════════════════════════════════════════════════ */
+        @media (max-width: 768px) {
+          .doc-layout {
+            grid-template-columns: 1fr;
+          }
+          .sidebar {
+            display: none;
+          }
+          .editor-area {
+            padding: 20px 16px 60px;
+          }
+        }
+      `}</style>
     </div>
   );
 }

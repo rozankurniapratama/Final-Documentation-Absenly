@@ -1,4 +1,3 @@
-// app/documentation/actions.ts
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
@@ -13,19 +12,12 @@ export async function toggleTaskAction(
 ): Promise<{ error: string | null }> {
   try {
     const supabase = await createClient();
-
     const { error } = await supabase
       .from("tasks")
-      .update({
-        is_completed: completed,
-        updated_at: new Date().toISOString()
-      })
+      .update({ is_completed: completed, updated_at: new Date().toISOString() })
       .eq("id", taskId);
 
-    if (error) {
-      return { error: error.message };
-    }
-
+    if (error) return { error: error.message };
     revalidatePath("/documentation");
     return { error: null };
   } catch (err) {
@@ -40,19 +32,12 @@ export async function updateTaskAction(
 ): Promise<{ error: string | null }> {
   try {
     const supabase = await createClient();
-
     const { error } = await supabase
       .from("tasks")
-      .update({
-        ...updates,
-        updated_at: new Date().toISOString()
-      })
+      .update({ ...updates, updated_at: new Date().toISOString() })
       .eq("id", taskId);
 
-    if (error) {
-      return { error: error.message };
-    }
-
+    if (error) return { error: error.message };
     revalidatePath("/documentation");
     return { error: null };
   } catch (err) {
@@ -66,23 +51,10 @@ export async function deleteTaskAction(
 ): Promise<{ error: string | null }> {
   try {
     const supabase = await createClient();
+    await supabase.from("task_documentation").delete().eq("task_id", taskId);
+    const { error } = await supabase.from("tasks").delete().eq("id", taskId);
 
-    // First delete associated documentation
-    await supabase
-      .from("task_documentation")
-      .delete()
-      .eq("task_id", taskId);
-
-    // Then delete the task
-    const { error } = await supabase
-      .from("tasks")
-      .delete()
-      .eq("id", taskId);
-
-    if (error) {
-      return { error: error.message };
-    }
-
+    if (error) return { error: error.message };
     revalidatePath("/documentation");
     return { error: null };
   } catch (err) {
@@ -99,16 +71,12 @@ export async function updateModuleAction(
 ): Promise<{ error: string | null }> {
   try {
     const supabase = await createClient();
-
     const { error } = await supabase
       .from("modules")
       .update({ name: newName })
       .eq("id", moduleId);
 
-    if (error) {
-      return { error: error.message };
-    }
-
+    if (error) return { error: error.message };
     revalidatePath("/documentation");
     return { error: null };
   } catch (err) {
@@ -122,44 +90,19 @@ export async function deleteModuleAction(
 ): Promise<{ error: string | null }> {
   try {
     const supabase = await createClient();
-
-    // Get all tasks in this module
-    const { tasks, error: fetchError } = await supabase
+    const { data: tasks } = await supabase
       .from("tasks")
       .select("id")
       .eq("module_id", moduleId);
 
-    if (fetchError) {
-      return { error: fetchError.message };
-    }
-
-    // If there are tasks, delete their documentation first, then the tasks
     if (tasks && tasks.length > 0) {
       const taskIds = tasks.map((t) => t.id);
-
-      // Delete all task_documentation entries for these tasks
-      await supabase
-        .from("task_documentation")
-        .delete()
-        .in("task_id", taskIds);
-
-      // Delete all tasks in this module
-      await supabase
-        .from("tasks")
-        .delete()
-        .eq("module_id", moduleId);
+      await supabase.from("task_documentation").delete().in("task_id", taskIds);
+      await supabase.from("tasks").delete().eq("module_id", moduleId);
     }
 
-    // Finally delete the module itself
-    const { error } = await supabase
-      .from("modules")
-      .delete()
-      .eq("id", moduleId);
-
-    if (error) {
-      return { error: error.message };
-    }
-
+    const { error } = await supabase.from("modules").delete().eq("id", moduleId);
+    if (error) return { error: error.message };
     revalidatePath("/documentation");
     return { error: null };
   } catch (err) {
@@ -173,32 +116,17 @@ export async function createModuleAction(
 ): Promise<{ data: { id: string } | null; error: string | null }> {
   try {
     const supabase = await createClient();
-
-    // Get the next display_order value
-    const { count, error: countError } = await supabase
+    const { count } = await supabase
       .from("modules")
       .select("*", { count: "exact", head: true });
 
-    if (countError) {
-      return { data: null, error: countError.message };
-    }
-
-    const nextOrder = (count ?? 0) + 1;
-
-    // Insert the new module
     const { data, error } = await supabase
       .from("modules")
-      .insert({
-        name: name.trim(),
-        display_order: nextOrder
-      })
+      .insert({ name: name.trim(), display_order: (count ?? 0) + 1 })
       .select("id")
       .single();
 
-    if (error) {
-      return { data: null, error: error.message };
-    }
-
+    if (error) return { data: null, error: error.message };
     revalidatePath("/documentation");
     return { data: { id: data.id }, error: null };
   } catch (err) {
@@ -213,7 +141,6 @@ export async function createTaskAction(
 ): Promise<{ data: { id: string } | null; error: string | null }> {
   try {
     const supabase = await createClient();
-
     const { data: newTask, error } = await supabase
       .from("tasks")
       .insert({
@@ -226,10 +153,7 @@ export async function createTaskAction(
       .select("id")
       .single();
 
-    if (error) {
-      return { data: null, error: error.message };
-    }
-
+    if (error) return { data: null, error: error.message };
     revalidatePath("/documentation");
     return { data: { id: newTask.id }, error: null };
   } catch (err) {
@@ -247,7 +171,6 @@ export async function saveDocumentationAction(
 ): Promise<{ error: string | null }> {
   try {
     const supabase = await createClient();
-
     const { error } = await supabase
       .from("task_documentation")
       .upsert(
@@ -257,15 +180,10 @@ export async function saveDocumentationAction(
           drawing_content: drawingContent,
           updated_at: new Date().toISOString(),
         },
-        {
-          onConflict: "task_id"
-        }
+        { onConflict: "task_id" }
       );
 
-    if (error) {
-      return { error: error.message };
-    }
-
+    if (error) return { error: error.message };
     return { error: null };
   } catch (err) {
     console.error("Save documentation error:", err);
@@ -282,20 +200,14 @@ export async function getDocumentationAction(
 }> {
   try {
     const supabase = await createClient();
-
     const { data, error } = await supabase
       .from("task_documentation")
       .select("text_content, drawing_content")
       .eq("task_id", taskId)
       .single();
 
-    // PGRST116 = "no rows returned", which is fine for new tasks
     if (error && error.code !== "PGRST116") {
-      return {
-        textContent: null,
-        drawingContent: null,
-        error: error.message
-      };
+      return { textContent: null, drawingContent: null, error: error.message };
     }
 
     return {
@@ -305,11 +217,7 @@ export async function getDocumentationAction(
     };
   } catch (err) {
     console.error("Get documentation error:", err);
-    return {
-      textContent: null,
-      drawingContent: null,
-      error: "Failed to load documentation",
-    };
+    return { textContent: null, drawingContent: null, error: "Failed to load documentation" };
   }
 }
 

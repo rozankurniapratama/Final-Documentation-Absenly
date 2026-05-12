@@ -18,7 +18,7 @@ export async function toggleTaskAction(
       .from("tasks")
       .update({
         is_completed: completed,
-        updated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       })
       .eq("id", taskId);
 
@@ -45,7 +45,7 @@ export async function updateTaskAction(
       .from("tasks")
       .update({
         ...updates,
-        updated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       })
       .eq("id", taskId);
 
@@ -124,8 +124,7 @@ export async function deleteModuleAction(
     const supabase = await createClient();
 
     // Get all tasks in this module
-    // FIX: Supabase returns { data, error }, not { tasks, error }
-    const { data: tasks, error: fetchError } = await supabase
+    const { tasks, error: fetchError } = await supabase
       .from("tasks")
       .select("id")
       .eq("module_id", moduleId);
@@ -191,7 +190,7 @@ export async function createModuleAction(
       .from("modules")
       .insert({
         name: name.trim(),
-        display_order: nextOrder,
+        display_order: nextOrder
       })
       .select("id")
       .single();
@@ -249,17 +248,19 @@ export async function saveDocumentationAction(
   try {
     const supabase = await createClient();
 
-    const { error } = await supabase.from("task_documentation").upsert(
-      {
-        task_id: taskId,
-        text_content: textContent,
-        drawing_content: drawingContent,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: "task_id",
-      }
-    );
+    const { error } = await supabase
+      .from("task_documentation")
+      .upsert(
+        {
+          task_id: taskId,
+          text_content: textContent,
+          drawing_content: drawingContent,
+          updated_at: new Date().toISOString(),
+        },
+        {
+          onConflict: "task_id"
+        }
+      );
 
     if (error) {
       return { error: error.message };
@@ -293,7 +294,7 @@ export async function getDocumentationAction(
       return {
         textContent: null,
         drawingContent: null,
-        error: error.message,
+        error: error.message
       };
     }
 

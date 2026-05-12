@@ -26,6 +26,7 @@ export default async function DocumentationPage() {
 
   const supabase = await createClient();
 
+  // Fetch modules with their tasks
   const { data: modules, error } = await supabase
     .from("modules")
     .select(
@@ -55,14 +56,13 @@ export default async function DocumentationPage() {
     );
   }
 
-  const sortedModules: Module[] = (modules || []).map((mod) => ({
-    id: mod.id,
-    name: mod.name,
-    display_order: mod.display_order,
-    tasks: [...(mod.tasks || [])].sort(
-      (a: Task, b: Task) => a.task_order - b.task_order
+  // Sort tasks within each module
+  const sortedModules: Module[] = (modules || []).map((module) => ({
+    ...module,
+    tasks: [...(module.tasks || [])].sort(
+      (a, b) => a.task_order - b.task_order
     ),
   }));
 
-  return <DocumentationDashboard initialModules={sortedModules} />;
+  return <DocumentationDashboard modules={sortedModules} />;
 }

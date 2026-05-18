@@ -20,6 +20,7 @@ import {
   RotateCcw,
   Code,
   Eye,
+  FileDown, // PDF export icon
 } from "lucide-react";
 import { saveDocumentationAction } from "../actions";
 import {
@@ -30,6 +31,8 @@ import {
 } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 
 /* ────────────────────────────────────────────
    Diagram Templates
@@ -535,7 +538,6 @@ function getMermaidExtension() {
       ];
     },
 
-    // Explicitly force JSON serialization to include code attr
     toJSON() {
       return {
         type: this.name,
@@ -549,6 +551,182 @@ function getMermaidExtension() {
   });
 
   return _mermaidExt;
+}
+
+/* ────────────────────────────────────────────
+   PDF Export Helper Functions
+   ──────────────────────────────────────────── */
+
+/**
+ * Converts an SVG string to a PNG data URL
+ */
+async function svgToPng(svg: string, scale = 2): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const svgBlob = new Blob([svg], { type: "image/svg+xml" });
+    const url = URL.createObjectURL(svgBlob);
+
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      const ctx = canvas.getContext("2d");
+      
+      if (!ctx) {
+        URL.revokeObjectURL(url);
+        reject(new Error("Could not get canvas context"));
+        return;
+      }
+
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      
+      const pngUrl = canvas.toDataURL("image/png");
+      URL.revokeObjectURL(url);
+      resolve(pngUrl);
+    };
+
+    img.onerror = (err) => {
+      URL.revokeObjectURL(url);
+      reject(err);
+    };
+
+    img.src = url;
+  });
+}
+
+/**
+ * Prepares editor content for PDF export with professional styling
+ */
+async function prepareContentForPdf(editorContent: HTMLElement): Promise<HTMLElement> {
+  const clone = editorContent.cloneNode(true) as HTMLElement;
+  
+  // Remove interactive elements and editor-specific classes
+  clone.querySelectorAll('.ProseMirror-selectednode, .mermaid-node [class*="ring-"]').forEach(el => {
+    el.classList.remove('ring-2', 'ring-purple-400', 'ring-offset-2', 'ProseMirror-selectednode');
+  });
+
+  // Convert all Mermaid diagrams to PNG images for PDF compatibility
+  const mermaidNodes = clone.querySelectorAll('.mermaid-node svg');
+  for (const svgEl of Array.from(mermaidNodes)) {
+    try {
+      const serializer = new XMLSerializer();
+      const svgString = serializer.serializeToString(svgEl);
+      const pngDataUrl = await svgToPng(svgString);
+      
+      const img = document.createElement("img");
+      img.src = pngDataUrl;
+      img.style.maxWidth = "100%";
+      img.style.height = "auto";
+      img.style.display = "block";
+      img.style.margin = "1rem auto";
+      
+      const parent = svgEl.parentElement;
+      if (parent) {
+        parent.replaceWith(img);
+      }
+    } catch (err) {
+      console.warn("Failed to convert Mermaid diagram to PNG:", err);
+      // Keep SVG as fallback
+    }
+  }
+
+  // Apply professional print styles
+  clone.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+  clone.style.lineHeight = "1.7";
+  clone.style.color = "#1f2937";
+  clone.style.maxWidth = "800px";
+  clone.style.margin = "0 auto";
+  clone.style.padding = "2rem";
+
+  // Style headings
+  clone.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((heading: Element) => {
+    heading.classList.add('print-heading');
+    (heading as HTMLElement).style.color = "#111827";
+    (heading as HTMLElement).style.margin = "1.5em 0 0.5em";
+    (heading as HTMLElement).style.fontWeight = "600";
+    (heading as HTMLElement).style.lineHeight = "1.3";
+  });
+  clone.querySelectorAll('h1').forEach((el: Element) => (el as HTMLElement).style.fontSize = "1.875rem");
+  clone.querySelectorAll('h2').forEach((el: Element) => (el as HTMLElement).style.fontSize = "1.5rem");
+  clone.querySelectorAll('h3').forEach((el: Element) => (el as HTMLElement).style.fontSize = "1.25rem");
+
+  // Style paragraphs
+  clone.querySelectorAll('p').forEach((p: Element) => {
+    (p as HTMLElement).style.margin = "0.75em 0";
+    (p as HTMLElement).style.color = "#374151";
+  });
+
+  // Style lists
+  clone.querySelectorAll('ul, ol').forEach((list: Element) => {
+    (list as HTMLElement).style.margin = "0.5em 0";
+    (list as HTMLElement).style.paddingLeft = "1.5em";
+  });
+  clone.querySelectorAll('li').forEach((li: Element) => {
+    (li as HTMLElement).style.margin = "0.25em 0";
+  });
+
+  // Style code blocks
+  clone.querySelectorAll('pre, code').forEach((el: Element) => {
+    (el as HTMLElement).style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+    (el as HTMLElement).style.fontSize = "0.875rem";
+  });
+  clone.querySelectorAll('pre').forEach((el: Element) => {
+    (el as HTMLElement).style.background = "#1f2937";
+    (el as HTMLElement).style.color = "#e5e7eb";
+    (el as HTMLElement).style.padding = "1rem";
+    (el as HTMLElement).style.borderRadius = "0.5rem";
+    (el as HTMLElement).style.overflowX = "auto";
+    (el as HTMLElement).style.margin = "1em 0";
+  });
+  clone.querySelectorAll('code:not(pre code)').forEach((el: Element) => {
+    (el as HTMLElement).style.background = "#f3f4f6";
+    (el as HTMLElement).style.color = "#111827";
+    (el as HTMLElement).style.padding = "0.2em 0.4em";
+    (el as HTMLElement).style.borderRadius = "0.25rem";
+  });
+
+  // Style blockquotes
+  clone.querySelectorAll('blockquote').forEach((el: Element) => {
+    (el as HTMLElement).style.borderLeft = "4px solid #e5e7eb";
+    (el as HTMLElement).style.padding = "0.5em 0 0.5em 1em";
+    (el as HTMLElement).style.margin = "1em 0";
+    (el as HTMLElement).style.color = "#4b5563";
+    (el as HTMLElement).style.fontStyle = "normal";
+  });
+
+  // Style links
+  clone.querySelectorAll('a').forEach((el: Element) => {
+    (el as HTMLElement).style.color = "#2563eb";
+    (el as HTMLElement).style.textDecoration = "none";
+    (el as HTMLElement).style.fontWeight = "500";
+  });
+
+  // Style tables
+  clone.querySelectorAll('table').forEach((table: Element) => {
+    (table as HTMLElement).style.width = "100%";
+    (table as HTMLElement).style.borderCollapse = "collapse";
+    (table as HTMLElement).style.margin = "1em 0";
+  });
+  clone.querySelectorAll('th, td').forEach((cell: Element) => {
+    (cell as HTMLElement).style.border = "1px solid #e5e7eb";
+    (cell as HTMLElement).style.padding = "0.75rem";
+    (cell as HTMLElement).style.textAlign = "left";
+  });
+  clone.querySelectorAll('th').forEach((el: Element) => {
+    (el as HTMLElement).style.background = "#f9fafb";
+    (el as HTMLElement).style.fontWeight = "600";
+  });
+
+  // Style horizontal rules
+  clone.querySelectorAll('hr').forEach((el: Element) => {
+    (el as HTMLElement).style.border = "none";
+    (el as HTMLElement).style.borderTop = "1px solid #e5e7eb";
+    (el as HTMLElement).style.margin = "2em 0";
+  });
+
+  return clone;
 }
 
 /* ────────────────────────────────────────────
@@ -576,7 +754,9 @@ export default function TaskEditor({
   const [hasChanges, setHasChanges] = useState(false);
   const [showSavedToast, setShowSavedToast] = useState(false);
   const [showDiagramMenu, setShowDiagramMenu] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const editorContentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -598,10 +778,12 @@ export default function TaskEditor({
       ? initialContent
       : { type: "doc", content: [{ type: "paragraph" }] },
     editorProps: {
-      attributes: { class: "prose prose-lg max-w-none focus:outline-none notion-prose min-h-[50vh]" },
+      attributes: { 
+        class: "prose prose-lg max-w-none focus:outline-none notion-prose min-h-[50vh]",
+        ref: editorContentRef 
+      },
     },
     onUpdate: ({ editor }) => {
-      // Use structuredClone to prevent reference mutations from Next.js
       const fresh = JSON.parse(JSON.stringify(editor.getJSON()));
       setContent(fresh);
       setHasChanges(true);
@@ -614,13 +796,9 @@ export default function TaskEditor({
     if (isSaving || !editor) return;
     setIsSaving(true);
     try {
-      // 1. Get absolute latest state
       const raw = editor.getJSON();
-      
-      // 2. Deep clone to strip any React/Next.js prototype chains or reference symbols
       const cleanContent = JSON.parse(JSON.stringify(raw));
       
-      // 3. Explicitly verify/fix mermaid nodes before sending
       const sanitizeMermaid = (obj: any): any => {
         if (!obj || typeof obj !== "object") return obj;
         if (Array.isArray(obj)) return obj.map(sanitizeMermaid);
@@ -654,6 +832,114 @@ export default function TaskEditor({
       setIsSaving(false);
     }
   }, [taskId, isSaving, editor]);
+
+  /**
+   * Export editor content to professional PDF with Mermaid diagrams as PNG
+   * This is a CLIENT-SIDE operation - NO database modifications occur
+   */
+  const handleExportPdf = useCallback(async () => {
+    if (!editor || isExporting) return;
+    
+    setIsExporting(true);
+    
+    try {
+      // Create a temporary container for export
+      const exportContainer = document.createElement("div");
+      exportContainer.style.position = "absolute";
+      exportContainer.style.left = "-9999px";
+      exportContainer.style.top = "0";
+      exportContainer.style.width = "210mm"; // A4 width
+      exportContainer.style.background = "white";
+      document.body.appendChild(exportContainer);
+
+      // Add document header for professional look
+      const header = document.createElement("div");
+      header.style.padding = "1rem 2rem";
+      header.style.borderBottom = "2px solid #e5e7eb";
+      header.style.marginBottom = "2rem";
+      header.innerHTML = `
+        <h1 style="margin: 0; font-size: 1.5rem; color: #111827;">${taskName}</h1>
+        <p style="margin: 0.25rem 0 0; color: #6b7280; font-size: 0.875rem;">
+          ${moduleName} • Task #${taskId.slice(-4)} • Exported: ${new Date().toLocaleDateString()}
+        </p>
+      `;
+      exportContainer.appendChild(header);
+
+      // Clone and prepare editor content
+      const editorElement = editor.view.dom;
+      const preparedContent = await prepareContentForPdf(editorElement);
+      exportContainer.appendChild(preparedContent);
+
+      // Add footer
+      const footer = document.createElement("div");
+      footer.style.padding = "1rem 2rem";
+      footer.style.borderTop = "1px solid #e5e7eb";
+      footer.style.marginTop = "2rem";
+      footer.style.textAlign = "center";
+      footer.style.color = "#9ca3af";
+      footer.style.fontSize = "0.75rem";
+      footer.textContent = `Generated from Documentation System • Page ${new Date().toLocaleDateString()}`;
+      exportContainer.appendChild(footer);
+
+      // Wait for images to load
+      await new Promise(resolve => {
+        const images = exportContainer.querySelectorAll("img");
+        if (images.length === 0) {
+          resolve(true);
+          return;
+        }
+        let loaded = 0;
+        images.forEach(img => {
+          if (img.complete) {
+            loaded++;
+          } else {
+            img.onload = () => { loaded++; if (loaded === images.length) resolve(true); };
+            img.onerror = () => { loaded++; if (loaded === images.length) resolve(true); };
+          }
+        });
+        if (loaded === images.length) resolve(true);
+      });
+
+      // Capture with html2canvas
+      const canvas = await html2canvas(exportContainer, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        logging: false,
+      });
+
+      // Generate PDF
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
+      const finalWidth = imgWidth * ratio;
+      const finalHeight = imgHeight * ratio;
+
+      pdf.addImage(imgData, "PNG", (pdfWidth - finalWidth) / 2, 10, finalWidth, finalHeight);
+      
+      // Download
+      const fileName = `${taskName.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_${new Date().toISOString().split("T")[0]}.pdf`;
+      pdf.save(fileName);
+
+      // Cleanup
+      document.body.removeChild(exportContainer);
+      
+    } catch (error) {
+      console.error("PDF export failed:", error);
+      alert("Failed to export PDF. Please try again.");
+    } finally {
+      setIsExporting(false);
+    }
+  }, [editor, taskName, moduleName, taskId, isExporting]);
 
   const insertMermaidDiagram = useCallback(
     (templateCode?: string) => {
@@ -689,10 +975,14 @@ export default function TaskEditor({
         e.preventDefault();
         insertMermaidDiagram();
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === "e" && e.shiftKey) {
+        e.preventDefault();
+        handleExportPdf();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleSave, insertMermaidDiagram]);
+  }, [handleSave, insertMermaidDiagram, handleExportPdf]);
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -719,18 +1009,25 @@ export default function TaskEditor({
     isActive,
     children,
     title,
+    disabled,
   }: {
     onClick: () => void;
     isActive?: boolean;
     children: React.ReactNode;
     title: string;
+    disabled?: boolean;
   }) => (
     <button
       type="button"
       onClick={onClick}
       title={title}
+      disabled={disabled}
       className={`p-2 rounded transition-colors ${
-        isActive ? "bg-gray-200 text-gray-900" : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+        disabled 
+          ? "text-gray-300 cursor-not-allowed" 
+          : isActive 
+            ? "bg-gray-200 text-gray-900" 
+            : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
       }`}
     >
       {children}
@@ -761,14 +1058,14 @@ export default function TaskEditor({
             <h1 className="text-sm font-semibold text-gray-900">{taskName}</h1>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {showSavedToast && (
             <span className="flex items-center gap-1 text-xs text-green-600 font-medium animate-fade-in">
               <Check className="w-3 h-3" /> Saved
             </span>
           )}
           {lastSaved && !showSavedToast && (
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-gray-400 hidden sm:inline">
               {lastSaved.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
             </span>
           )}
@@ -777,6 +1074,26 @@ export default function TaskEditor({
               <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Editing
             </span>
           )}
+          
+          {/* PDF Export Button */}
+          <button
+            onClick={handleExportPdf}
+            disabled={isExporting}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
+              isExporting 
+                ? "bg-gray-100 text-gray-400 cursor-not-allowed" 
+                : "bg-indigo-600 text-white hover:bg-indigo-700 active:scale-[0.98]"
+            }`}
+            title="Export to PDF (Shift+Ctrl+E)"
+          >
+            {isExporting ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <FileDown className="w-4 h-4" />
+            )}
+            <span className="hidden sm:inline">{isExporting ? "Exporting" : "Export PDF"}</span>
+          </button>
+          
           <button
             onClick={handleSave}
             disabled={isSaving || !hasChanges}
@@ -854,7 +1171,9 @@ export default function TaskEditor({
       <footer className="border-t border-gray-100 bg-white/80 backdrop-blur-sm px-4 py-2 text-xs text-gray-400 flex items-center justify-between">
         <span>{hasChanges ? "● Unsaved changes" : "✓ All changes saved"}</span>
         <span className="hidden sm:inline">
-          Press <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">S</kbd> to save · <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">M</kbd> for diagram
+          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">S</kbd> save • 
+          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">M</kbd> diagram • 
+          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Shift+Ctrl+E</kbd> export PDF
         </span>
       </footer>
 
@@ -886,6 +1205,11 @@ export default function TaskEditor({
         .ProseMirror-selectednode { outline: 2px solid #3b82f6; outline-offset: 2px; border-radius: 0.25rem; }
         .mermaid-node .ProseMirror-focused { outline: none; }
         .mermaid-node .ProseMirror-selectednode { outline: none; }
+        
+        /* Print-specific styles */
+        @media print {
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
       `}</style>
     </div>
   );

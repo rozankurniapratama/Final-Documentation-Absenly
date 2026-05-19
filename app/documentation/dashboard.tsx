@@ -655,8 +655,8 @@ export default function DocumentationDashboard({
                 key={option}
                 onClick={() => setFilter(option)}
                 className={`px-4 py-3 brutal-border font-bold uppercase text-sm transition-all ${filter === option
-                    ? "bg-primary text-primary-foreground brutal-shadow-sm"
-                    : "bg-card hover:bg-accent"
+                  ? "bg-primary text-primary-foreground brutal-shadow-sm"
+                  : "bg-card hover:bg-accent"
                   }`}
               >
                 {option}
@@ -843,8 +843,8 @@ export default function DocumentationDashboard({
                             onClick={(e) => handleToggleTask(e, module.id, task.id, task.is_completed)}
                             disabled={isUpdatingTask}
                             className={`w-6 h-6 brutal-border flex-shrink-0 flex items-center justify-center transition-all ${task.is_completed
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-card hover:bg-accent"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-card hover:bg-accent"
                               } ${isUpdatingTask ? "cursor-not-allowed" : ""}`}
                           >
                             {task.is_completed && (

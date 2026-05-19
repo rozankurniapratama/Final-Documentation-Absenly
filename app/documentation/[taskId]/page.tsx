@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import DocumentationDashboard from "./dashboard";
+import DocumentationDashboard from "../dashboard";
 
 interface Task {
   id: string;

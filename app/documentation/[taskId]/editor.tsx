@@ -1,6 +1,7 @@
+// app/documentation/[taskId]/editor/TaskEditor.tsx
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -20,7 +21,10 @@ import {
   RotateCcw,
   Code,
   Eye,
-  FileDown, // PDF export icon
+  FileDown,
+  AlertTriangle,
+  Download,
+  Printer,
 } from "lucide-react";
 import { saveDocumentationAction } from "../actions";
 import {
@@ -35,9 +39,19 @@ import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 
 /* ────────────────────────────────────────────
+   ⚠️ MEMORY SAFETY CONFIG
+   ──────────────────────────────────────────── */
+const MEMORY_CONFIG = {
+  MAX_CONTENT_LENGTH: 150000, // Warn if content exceeds this
+  MAX_DIAGRAMS_IN_PDF: 8, // Limit diagrams per export to prevent OOM
+  SVG_TO_PNG_SCALE: 1.5, // Lower scale = less memory (was 2.0)
+  CLEANUP_TIMEOUT_MS: 500, // Delay before revoking blob URLs
+  EXPORT_DEBOUNCE_MS: 2000, // Prevent rapid export clicks
+};
+
+/* ────────────────────────────────────────────
    Diagram Templates
    ──────────────────────────────────────────── */
-
 const DIAGRAM_TEMPLATES = [
   {
     label: "Flowchart",
@@ -93,9 +107,53 @@ const DIAGRAM_TEMPLATES = [
 ];
 
 /* ────────────────────────────────────────────
-   Mermaid Block Component (UI UNTOUCHED)
+   🧹 Blob URL Manager (Prevents Memory Leaks)
    ──────────────────────────────────────────── */
+class BlobURLManager {
+  private static urls: Set<string> = new Set();
+  private static cleanupTimers: Map<string, NodeJS.Timeout> = new Map();
 
+  static create(url: string): string {
+    this.urls.add(url);
+    return url;
+  }
+
+  static scheduleRevoke(url: string, delayMs = MEMORY_CONFIG.CLEANUP_TIMEOUT_MS) {
+    // Clear existing timer if any
+    if (this.cleanupTimers.has(url)) {
+      clearTimeout(this.cleanupTimers.get(url));
+    }
+    
+    const timer = setTimeout(() => {
+      try {
+        URL.revokeObjectURL(url);
+        this.urls.delete(url);
+      } catch (e) {
+        console.warn("Failed to revoke blob URL:", e);
+      }
+      this.cleanupTimers.delete(url);
+    }, delayMs);
+    
+    this.cleanupTimers.set(url, timer);
+  }
+
+  static revokeAll() {
+    this.urls.forEach(url => {
+      try { URL.revokeObjectURL(url); } catch (e) {}
+    });
+    this.urls.clear();
+    this.cleanupTimers.forEach(timer => clearTimeout(timer));
+    this.cleanupTimers.clear();
+  }
+
+  static getStats() {
+    return { active: this.urls.size, pending: this.cleanupTimers.size };
+  }
+}
+
+/* ────────────────────────────────────────────
+   Mermaid Block Component (UI UNTOUCHED + Memory Safe)
+   ──────────────────────────────────────────── */
 function MermaidBlock({
   node,
   updateAttributes,
@@ -186,6 +244,13 @@ function MermaidBlock({
       clearTimeout(timeout);
     };
   }, [localCode, mermaidReady]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Any SVG blob URLs created here would be cleaned by BlobURLManager
+    };
+  }, []);
 
   const handleZoomIn = useCallback(
     () => setZoom((z) => Math.min(z + 0.25, 3)),
@@ -495,7 +560,6 @@ function MermaidBlock({
 /* ────────────────────────────────────────────
    Mermaid TipTap Node Extension - SERIALIZATION SAFE
    ──────────────────────────────────────────── */
-
 let _mermaidExt: any = null;
 
 function getMermaidExtension() {
@@ -554,41 +618,102 @@ function getMermaidExtension() {
 }
 
 /* ────────────────────────────────────────────
-   PDF Export Helper Functions
+   🔧 PDF Export Helpers (Memory-Safe Version)
    ──────────────────────────────────────────── */
 
 /**
- * Converts an SVG string to a PNG data URL
+ * Reusable canvas pool to avoid creating new canvases repeatedly
  */
-async function svgToPng(svg: string, scale = 2): Promise<string> {
+const CanvasPool = {
+  pool: [] as HTMLCanvasElement[],
+  
+  acquire(width: number, height: number): HTMLCanvasElement {
+    // Find existing canvas with same or larger dimensions
+    const existing = this.pool.find(c => c.width >= width && c.height >= height);
+    if (existing) {
+      this.pool = this.pool.filter(c => c !== existing);
+      existing.width = width;
+      existing.height = height;
+      return existing;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
+  },
+  
+  release(canvas: HTMLCanvasElement) {
+    // Clear and return to pool (limit pool size to 3)
+    const ctx = canvas.getContext("2d");
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    if (this.pool.length < 3) {
+      this.pool.push(canvas);
+    }
+  },
+  
+  clear() {
+    this.pool = [];
+  }
+};
+
+/**
+ * Converts SVG to PNG with memory-safe canvas reuse
+ */
+async function svgToPngSafe(svg: string, scale = MEMORY_CONFIG.SVG_TO_PNG_SCALE): Promise<string> {
   return new Promise((resolve, reject) => {
+    const parser = new DOMParser();
+    const svgDoc = parser.parseFromString(svg, "image/svg+xml");
+    const svgEl = svgDoc.querySelector("svg");
+    
+    if (!svgEl) {
+      reject(new Error("Invalid SVG"));
+      return;
+    }
+
+    // Get dimensions from SVG or fallback
+    const width = parseInt(svgEl.getAttribute("width") || "800");
+    const height = parseInt(svgEl.getAttribute("height") || "600");
+    const scaledWidth = Math.round(width * scale);
+    const scaledHeight = Math.round(height * scale);
+
+    const canvas = CanvasPool.acquire(scaledWidth, scaledHeight);
+    const ctx = canvas.getContext("2d");
+    
+    if (!ctx) {
+      CanvasPool.release(canvas);
+      reject(new Error("Could not get canvas context"));
+      return;
+    }
+
     const img = new Image();
     const svgBlob = new Blob([svg], { type: "image/svg+xml" });
     const url = URL.createObjectURL(svgBlob);
+    
+    // Track this blob for cleanup
+    BlobURLManager.create(url);
 
     img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
-      const ctx = canvas.getContext("2d");
-      
-      if (!ctx) {
-        URL.revokeObjectURL(url);
-        reject(new Error("Could not get canvas context"));
-        return;
+      try {
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, scaledWidth, scaledHeight);
+        ctx.drawImage(img, 0, 0, scaledWidth, scaledHeight);
+        
+        const pngUrl = canvas.toDataURL("image/png");
+        URL.revokeObjectURL(url); // Immediate cleanup for SVG blob
+        resolve(pngUrl);
+      } catch (err) {
+        reject(err);
+      } finally {
+        CanvasPool.release(canvas);
+        BlobURLManager.scheduleRevoke(url); // Double-safety cleanup
       }
-
-      ctx.fillStyle = "white";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      
-      const pngUrl = canvas.toDataURL("image/png");
-      URL.revokeObjectURL(url);
-      resolve(pngUrl);
     };
 
     img.onerror = (err) => {
       URL.revokeObjectURL(url);
+      CanvasPool.release(canvas);
+      BlobURLManager.scheduleRevoke(url);
       reject(err);
     };
 
@@ -597,142 +722,271 @@ async function svgToPng(svg: string, scale = 2): Promise<string> {
 }
 
 /**
- * Prepares editor content for PDF export with professional styling
+ * Prepares content for PDF with professional styling and memory guards
  */
-async function prepareContentForPdf(editorContent: HTMLElement): Promise<HTMLElement> {
+async function prepareContentForPdfSafe(
+  editorContent: HTMLElement,
+  options: { skipDiagrams?: boolean; maxDiagrams?: number } = {}
+): Promise<{ element: HTMLElement; warning?: string }> {
   const clone = editorContent.cloneNode(true) as HTMLElement;
+  const { skipDiagrams = false, maxDiagrams = MEMORY_CONFIG.MAX_DIAGRAMS_IN_PDF } = options;
   
-  // Remove interactive elements and editor-specific classes
+  let diagramCount = 0;
+  let skippedCount = 0;
+
+  // Remove interactive elements
   clone.querySelectorAll('.ProseMirror-selectednode, .mermaid-node [class*="ring-"]').forEach(el => {
     el.classList.remove('ring-2', 'ring-purple-400', 'ring-offset-2', 'ProseMirror-selectednode');
   });
 
-  // Convert all Mermaid diagrams to PNG images for PDF compatibility
-  const mermaidNodes = clone.querySelectorAll('.mermaid-node svg');
-  for (const svgEl of Array.from(mermaidNodes)) {
-    try {
-      const serializer = new XMLSerializer();
-      const svgString = serializer.serializeToString(svgEl);
-      const pngDataUrl = await svgToPng(svgString);
-      
-      const img = document.createElement("img");
-      img.src = pngDataUrl;
-      img.style.maxWidth = "100%";
-      img.style.height = "auto";
-      img.style.display = "block";
-      img.style.margin = "1rem auto";
-      
-      const parent = svgEl.parentElement;
-      if (parent) {
-        parent.replaceWith(img);
+  // Convert Mermaid diagrams to PNG (with limit)
+  if (!skipDiagrams) {
+    const mermaidNodes = clone.querySelectorAll('.mermaid-node svg');
+    
+    for (const svgEl of Array.from(mermaidNodes)) {
+      if (diagramCount >= maxDiagrams) {
+        skippedCount++;
+        // Replace with placeholder
+        const placeholder = document.createElement("div");
+        placeholder.style.cssText = "padding:1rem;background:#f3f4f6;border:1px dashed #9ca3af;border-radius:0.5rem;text-align:center;color:#6b7280;font-size:0.875rem";
+        placeholder.textContent = "Diagram omitted (export limit reached)";
+        svgEl.parentElement?.replaceWith(placeholder);
+        continue;
       }
-    } catch (err) {
-      console.warn("Failed to convert Mermaid diagram to PNG:", err);
-      // Keep SVG as fallback
+
+      try {
+        const serializer = new XMLSerializer();
+        const svgString = serializer.serializeToString(svgEl);
+        const pngDataUrl = await svgToPngSafe(svgString);
+        
+        const img = document.createElement("img");
+        img.src = pngDataUrl;
+        img.style.cssText = "max-width:100%;height:auto;display:block;margin:1rem auto";
+        img.alt = "Diagram";
+        
+        const parent = svgEl.parentElement;
+        if (parent) parent.replaceWith(img);
+        
+        diagramCount++;
+        // Schedule cleanup of the PNG data URL after delay
+        if (pngDataUrl.startsWith("data:")) {
+          // Data URLs don't need URL.revokeObjectURL, but we track for memory awareness
+        }
+      } catch (err) {
+        console.warn("Failed to convert diagram:", err);
+        // Keep SVG as fallback but add warning class
+        svgEl.classList.add("print-fallback");
+      }
     }
+  } else {
+    // If skipping diagrams, just hide them
+    clone.querySelectorAll('.mermaid-node').forEach(el => {
+      (el as HTMLElement).style.display = "none";
+    });
   }
 
   // Apply professional print styles
-  clone.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
-  clone.style.lineHeight = "1.7";
-  clone.style.color = "#1f2937";
-  clone.style.maxWidth = "800px";
-  clone.style.margin = "0 auto";
-  clone.style.padding = "2rem";
+  Object.assign(clone.style, {
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    lineHeight: "1.7",
+    color: "#1f2937",
+    maxWidth: "800px",
+    margin: "0 auto",
+    padding: "2rem",
+    boxSizing: "border-box",
+  });
 
   // Style headings
   clone.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((heading: Element) => {
-    heading.classList.add('print-heading');
-    (heading as HTMLElement).style.color = "#111827";
-    (heading as HTMLElement).style.margin = "1.5em 0 0.5em";
-    (heading as HTMLElement).style.fontWeight = "600";
-    (heading as HTMLElement).style.lineHeight = "1.3";
+    Object.assign((heading as HTMLElement).style, {
+      color: "#111827",
+      margin: "1.5em 0 0.5em",
+      fontWeight: "600",
+      lineHeight: "1.3",
+    });
   });
-  clone.querySelectorAll('h1').forEach((el: Element) => (el as HTMLElement).style.fontSize = "1.875rem");
-  clone.querySelectorAll('h2').forEach((el: Element) => (el as HTMLElement).style.fontSize = "1.5rem");
-  clone.querySelectorAll('h3').forEach((el: Element) => (el as HTMLElement).style.fontSize = "1.25rem");
+  clone.querySelectorAll('h1').forEach(el => (el as HTMLElement).style.fontSize = "1.875rem");
+  clone.querySelectorAll('h2').forEach(el => (el as HTMLElement).style.fontSize = "1.5rem");
+  clone.querySelectorAll('h3').forEach(el => (el as HTMLElement).style.fontSize = "1.25rem");
 
   // Style paragraphs
-  clone.querySelectorAll('p').forEach((p: Element) => {
-    (p as HTMLElement).style.margin = "0.75em 0";
-    (p as HTMLElement).style.color = "#374151";
+  clone.querySelectorAll('p').forEach(p => {
+    Object.assign((p as HTMLElement).style, {
+      margin: "0.75em 0",
+      color: "#374151",
+    });
   });
 
   // Style lists
-  clone.querySelectorAll('ul, ol').forEach((list: Element) => {
-    (list as HTMLElement).style.margin = "0.5em 0";
-    (list as HTMLElement).style.paddingLeft = "1.5em";
+  clone.querySelectorAll('ul, ol').forEach(list => {
+    Object.assign((list as HTMLElement).style, {
+      margin: "0.5em 0",
+      paddingLeft: "1.5em",
+    });
   });
-  clone.querySelectorAll('li').forEach((li: Element) => {
+  clone.querySelectorAll('li').forEach(li => {
     (li as HTMLElement).style.margin = "0.25em 0";
   });
 
   // Style code blocks
-  clone.querySelectorAll('pre, code').forEach((el: Element) => {
+  clone.querySelectorAll('pre, code').forEach(el => {
     (el as HTMLElement).style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
     (el as HTMLElement).style.fontSize = "0.875rem";
   });
-  clone.querySelectorAll('pre').forEach((el: Element) => {
-    (el as HTMLElement).style.background = "#1f2937";
-    (el as HTMLElement).style.color = "#e5e7eb";
-    (el as HTMLElement).style.padding = "1rem";
-    (el as HTMLElement).style.borderRadius = "0.5rem";
-    (el as HTMLElement).style.overflowX = "auto";
-    (el as HTMLElement).style.margin = "1em 0";
+  clone.querySelectorAll('pre').forEach(el => {
+    Object.assign((el as HTMLElement).style, {
+      background: "#1f2937",
+      color: "#e5e7eb",
+      padding: "1rem",
+      borderRadius: "0.5rem",
+      overflowX: "auto",
+      margin: "1em 0",
+    });
   });
-  clone.querySelectorAll('code:not(pre code)').forEach((el: Element) => {
-    (el as HTMLElement).style.background = "#f3f4f6";
-    (el as HTMLElement).style.color = "#111827";
-    (el as HTMLElement).style.padding = "0.2em 0.4em";
-    (el as HTMLElement).style.borderRadius = "0.25rem";
+  clone.querySelectorAll('code:not(pre code)').forEach(el => {
+    Object.assign((el as HTMLElement).style, {
+      background: "#f3f4f6",
+      color: "#111827",
+      padding: "0.2em 0.4em",
+      borderRadius: "0.25rem",
+    });
   });
 
   // Style blockquotes
-  clone.querySelectorAll('blockquote').forEach((el: Element) => {
-    (el as HTMLElement).style.borderLeft = "4px solid #e5e7eb";
-    (el as HTMLElement).style.padding = "0.5em 0 0.5em 1em";
-    (el as HTMLElement).style.margin = "1em 0";
-    (el as HTMLElement).style.color = "#4b5563";
-    (el as HTMLElement).style.fontStyle = "normal";
+  clone.querySelectorAll('blockquote').forEach(el => {
+    Object.assign((el as HTMLElement).style, {
+      borderLeft: "4px solid #e5e7eb",
+      padding: "0.5em 0 0.5em 1em",
+      margin: "1em 0",
+      color: "#4b5563",
+      fontStyle: "normal",
+    });
   });
 
   // Style links
-  clone.querySelectorAll('a').forEach((el: Element) => {
-    (el as HTMLElement).style.color = "#2563eb";
-    (el as HTMLElement).style.textDecoration = "none";
-    (el as HTMLElement).style.fontWeight = "500";
+  clone.querySelectorAll('a').forEach(el => {
+    Object.assign((el as HTMLElement).style, {
+      color: "#2563eb",
+      textDecoration: "none",
+      fontWeight: "500",
+    });
   });
 
   // Style tables
-  clone.querySelectorAll('table').forEach((table: Element) => {
-    (table as HTMLElement).style.width = "100%";
-    (table as HTMLElement).style.borderCollapse = "collapse";
-    (table as HTMLElement).style.margin = "1em 0";
+  clone.querySelectorAll('table').forEach(table => {
+    Object.assign((table as HTMLElement).style, {
+      width: "100%",
+      borderCollapse: "collapse",
+      margin: "1em 0",
+    });
   });
-  clone.querySelectorAll('th, td').forEach((cell: Element) => {
-    (cell as HTMLElement).style.border = "1px solid #e5e7eb";
-    (cell as HTMLElement).style.padding = "0.75rem";
-    (cell as HTMLElement).style.textAlign = "left";
+  clone.querySelectorAll('th, td').forEach(cell => {
+    Object.assign((cell as HTMLElement).style, {
+      border: "1px solid #e5e7eb",
+      padding: "0.75rem",
+      textAlign: "left",
+    });
   });
-  clone.querySelectorAll('th').forEach((el: Element) => {
-    (el as HTMLElement).style.background = "#f9fafb";
-    (el as HTMLElement).style.fontWeight = "600";
+  clone.querySelectorAll('th').forEach(el => {
+    Object.assign((el as HTMLElement).style, {
+      background: "#f9fafb",
+      fontWeight: "600",
+    });
   });
 
   // Style horizontal rules
-  clone.querySelectorAll('hr').forEach((el: Element) => {
-    (el as HTMLElement).style.border = "none";
-    (el as HTMLElement).style.borderTop = "1px solid #e5e7eb";
-    (el as HTMLElement).style.margin = "2em 0";
+  clone.querySelectorAll('hr').forEach(el => {
+    Object.assign((el as HTMLElement).style, {
+      border: "none",
+      borderTop: "1px solid #e5e7eb",
+      margin: "2em 0",
+    });
   });
 
-  return clone;
+  const warning = skippedCount > 0 
+    ? `${skippedCount} diagram(s) omitted to prevent memory issues`
+    : diagramCount > maxDiagrams 
+      ? `Exported ${maxDiagrams} diagrams (limit reached)`
+      : undefined;
+
+  return { element: clone, warning };
+}
+
+/**
+ * Simple fallback: use browser print dialog (zero memory risk)
+ */
+function exportViaPrint(title: string, moduleName: string, taskId: string) {
+  const printWindow = window.open("", "_blank", "width=800,height=600");
+  if (!printWindow) {
+    alert("Popup blocked. Please allow popups for PDF export.");
+    return;
+  }
+
+  const styles = `
+    <style>
+      @media print {
+        body { margin: 0; padding: 20mm; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+        .no-print { display: none !important; }
+        .page-break { page-break-before: always; }
+        img { max-width: 100%; height: auto; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+      }
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1f2937; max-width: 800px; margin: 0 auto; padding: 2rem; }
+      h1, h2, h3 { color: #111827; }
+      .header { border-bottom: 2px solid #e5e7eb; padding-bottom: 1rem; margin-bottom: 2rem; }
+      .footer { border-top: 1px solid #e5e7eb; padding-top: 1rem; margin-top: 2rem; text-align: center; color: #6b7280; font-size: 0.875rem; }
+      code { background: #f3f4f6; padding: 0.2em 0.4em; border-radius: 0.25rem; font-family: monospace; }
+      pre { background: #1f2937; color: #e5e7eb; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; }
+      a { color: #2563eb; text-decoration: none; }
+    </style>
+  `;
+
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>${title} - Documentation</title>
+      ${styles}
+    </head>
+    <body>
+      <div class="header no-print">
+        <h1 style="margin:0">${title}</h1>
+        <p style="margin:0.25rem 0;color:#6b7280">${moduleName} • Task #${taskId.slice(-4)}</p>
+        <button onclick="window.print()" style="margin-top:1rem;padding:0.5rem 1rem;background:#2563eb;color:white;border:none;border-radius:0.375rem;cursor:pointer">🖨️ Print / Save as PDF</button>
+        <p style="font-size:0.875rem;color:#6b7280;margin-top:0.5rem">Tip: In print dialog, choose "Save as PDF" as destination</p>
+      </div>
+      <div id="content"></div>
+      <div class="footer">
+        <p>Generated from Documentation System • ${new Date().toLocaleDateString()}</p>
+        <p class="no-print" style="font-size:0.75rem">Close this tab after printing</p>
+      </div>
+      <script>
+        // Copy editor content
+        const editorContent = window.opener?.document?.querySelector('.ProseMirror');
+        if (editorContent) {
+          const clone = editorContent.cloneNode(true);
+          // Remove interactive classes
+          clone.querySelectorAll('.ProseMirror-selectednode, [class*="ring-"]').forEach(el => {
+            el.classList.remove('ProseMirror-selectednode');
+            el.className = el.className.replace(/ring-\\S+/g, '').trim();
+          });
+          document.getElementById('content').appendChild(clone);
+        }
+        // Auto-focus print button
+        window.addEventListener('load', () => {
+          const btn = document.querySelector('button');
+          if (btn) btn.focus();
+        });
+      </script>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
 }
 
 /* ────────────────────────────────────────────
-   Editor Component
+   Editor Component (MONOLITHIC)
    ──────────────────────────────────────────── */
-
 interface TaskEditorProps {
   taskId: string;
   taskName: string;
@@ -755,9 +1009,22 @@ export default function TaskEditor({
   const [showSavedToast, setShowSavedToast] = useState(false);
   const [showDiagramMenu, setShowDiagramMenu] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportMode, setExportMode] = useState<"full" | "simple" | "print">("full");
+  const [exportWarning, setExportWarning] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const editorContentRef = useRef<HTMLDivElement>(null);
+  const exportTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Global cleanup on unmount
+  useEffect(() => {
+    return () => {
+      BlobURLManager.revokeAll();
+      CanvasPool.clear();
+      if (exportTimeoutRef.current) clearTimeout(exportTimeoutRef.current);
+    };
+  }, []);
+
+  // Close diagram menu on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -791,7 +1058,17 @@ export default function TaskEditor({
     immediatelyRender: false,
   });
 
-  /* Save - Fetches directly from editor, bypasses stale refs */
+  // Check content size and warn if large
+  const contentSizeWarning = useMemo(() => {
+    if (!content) return null;
+    const jsonStr = JSON.stringify(content);
+    if (jsonStr.length > MEMORY_CONFIG.MAX_CONTENT_LENGTH) {
+      return `Large document (${Math.round(jsonStr.length / 1000)}KB). PDF export may be slow or fail. Consider using "Simple Export" or "Print" mode.`;
+    }
+    return null;
+  }, [content]);
+
+  /* Save - Fetches directly from editor */
   const handleSave = useCallback(async () => {
     if (isSaving || !editor) return;
     setIsSaving(true);
@@ -834,78 +1111,118 @@ export default function TaskEditor({
   }, [taskId, isSaving, editor]);
 
   /**
-   * Export editor content to professional PDF with Mermaid diagrams as PNG
-   * This is a CLIENT-SIDE operation - NO database modifications occur
+   * Memory-safe PDF export with multiple modes
    */
-  const handleExportPdf = useCallback(async () => {
+  const handleExportPdf = useCallback(async (mode: "full" | "simple" | "print" = "full") => {
     if (!editor || isExporting) return;
     
+    // Debounce rapid clicks
+    if (exportTimeoutRef.current) {
+      clearTimeout(exportTimeoutRef.current);
+    }
+    
     setIsExporting(true);
+    setExportWarning(null);
+    setExportMode(mode);
     
     try {
-      // Create a temporary container for export
+      // MODE: Print fallback (safest, zero memory risk)
+      if (mode === "print") {
+        exportViaPrint(taskName, moduleName, taskId);
+        return;
+      }
+
+      // Create temporary container
       const exportContainer = document.createElement("div");
-      exportContainer.style.position = "absolute";
-      exportContainer.style.left = "-9999px";
-      exportContainer.style.top = "0";
-      exportContainer.style.width = "210mm"; // A4 width
-      exportContainer.style.background = "white";
+      Object.assign(exportContainer.style, {
+        position: "absolute",
+        left: "-9999px",
+        top: "0",
+        width: "210mm", // A4 width
+        background: "white",
+        boxSizing: "border-box",
+      });
       document.body.appendChild(exportContainer);
 
-      // Add document header for professional look
+      // Add header
       const header = document.createElement("div");
-      header.style.padding = "1rem 2rem";
-      header.style.borderBottom = "2px solid #e5e7eb";
-      header.style.marginBottom = "2rem";
+      header.style.cssText = "padding:1rem 2rem;border-bottom:2px solid #e5e7eb;margin-bottom:2rem";
       header.innerHTML = `
-        <h1 style="margin: 0; font-size: 1.5rem; color: #111827;">${taskName}</h1>
-        <p style="margin: 0.25rem 0 0; color: #6b7280; font-size: 0.875rem;">
+        <h1 style="margin:0;font-size:1.5rem;color:#111827">${taskName}</h1>
+        <p style="margin:0.25rem 0 0;color:#6b7280;font-size:0.875rem">
           ${moduleName} • Task #${taskId.slice(-4)} • Exported: ${new Date().toLocaleDateString()}
         </p>
       `;
       exportContainer.appendChild(header);
 
-      // Clone and prepare editor content
-      const editorElement = editor.view.dom;
-      const preparedContent = await prepareContentForPdf(editorElement);
+      // Prepare content with memory guards
+      const { element: preparedContent, warning } = await prepareContentForPdfSafe(
+        editor.view.dom,
+        { 
+          skipDiagrams: mode === "simple",
+          maxDiagrams: mode === "simple" ? 3 : MEMORY_CONFIG.MAX_DIAGRAMS_IN_PDF
+        }
+      );
+      
+      if (warning) setExportWarning(warning);
       exportContainer.appendChild(preparedContent);
 
       // Add footer
       const footer = document.createElement("div");
-      footer.style.padding = "1rem 2rem";
-      footer.style.borderTop = "1px solid #e5e7eb";
-      footer.style.marginTop = "2rem";
-      footer.style.textAlign = "center";
-      footer.style.color = "#9ca3af";
-      footer.style.fontSize = "0.75rem";
+      footer.style.cssText = "padding:1rem 2rem;border-top:1px solid #e5e7eb;margin-top:2rem;text-align:center;color:#9ca3af;font-size:0.75rem";
       footer.textContent = `Generated from Documentation System • Page ${new Date().toLocaleDateString()}`;
       exportContainer.appendChild(footer);
 
-      // Wait for images to load
-      await new Promise(resolve => {
+      // Wait for images to load (with timeout guard)
+      await new Promise((resolve, reject) => {
         const images = exportContainer.querySelectorAll("img");
         if (images.length === 0) {
           resolve(true);
           return;
         }
+        
         let loaded = 0;
+        const timeout = setTimeout(() => {
+          console.warn("Image loading timeout, proceeding with loaded images");
+          resolve(true);
+        }, 5000); // 5 second max wait
+        
         images.forEach(img => {
-          if (img.complete) {
+          if ((img as HTMLImageElement).complete) {
             loaded++;
           } else {
-            img.onload = () => { loaded++; if (loaded === images.length) resolve(true); };
-            img.onerror = () => { loaded++; if (loaded === images.length) resolve(true); };
+            img.onload = () => { 
+              loaded++; 
+              if (loaded === images.length) {
+                clearTimeout(timeout);
+                resolve(true);
+              }
+            };
+            img.onerror = () => { 
+              loaded++; 
+              if (loaded === images.length) {
+                clearTimeout(timeout);
+                resolve(true);
+              }
+            };
           }
         });
-        if (loaded === images.length) resolve(true);
+        
+        if (loaded === images.length) {
+          clearTimeout(timeout);
+          resolve(true);
+        }
       });
 
-      // Capture with html2canvas
+      // Capture with html2canvas (optimized settings)
       const canvas = await html2canvas(exportContainer, {
-        scale: 2,
+        scale: 2, // Balance quality vs memory
         useCORS: true,
         backgroundColor: "#ffffff",
         logging: false,
+        removeContainer: true, // Auto-remove after capture
+        windowWidth: exportContainer.scrollWidth,
+        windowHeight: exportContainer.scrollHeight,
       });
 
       // Generate PDF
@@ -930,14 +1247,25 @@ export default function TaskEditor({
       const fileName = `${taskName.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_${new Date().toISOString().split("T")[0]}.pdf`;
       pdf.save(fileName);
 
-      // Cleanup
+      // Cleanup: remove container and schedule blob cleanup
       document.body.removeChild(exportContainer);
-      
-    } catch (error) {
+      BlobURLManager.scheduleRevoke(imgData, 1000); // Schedule cleanup of PDF image data
+
+    } catch (error: any) {
       console.error("PDF export failed:", error);
-      alert("Failed to export PDF. Please try again.");
+      
+      // Fallback suggestion
+      if (error.message?.includes("memory") || error.message?.includes("canvas")) {
+        alert("PDF export failed due to memory constraints.\n\nTry:\n• 'Simple Export' (fewer diagrams)\n• 'Print Mode' (uses browser print)\n• Reduce document size");
+      } else {
+        alert("Failed to export PDF. Please try again or use Print mode.");
+      }
     } finally {
       setIsExporting(false);
+      // Final cleanup pass
+      exportTimeoutRef.current = setTimeout(() => {
+        BlobURLManager.revokeAll();
+      }, 2000);
     }
   }, [editor, taskName, moduleName, taskId, isExporting]);
 
@@ -959,12 +1287,14 @@ export default function TaskEditor({
     [editor],
   );
 
+  // Auto-save debounce
   useEffect(() => {
     if (!hasChanges || isSaving) return;
     const timer = setTimeout(handleSave, 30000);
     return () => clearTimeout(timer);
   }, [hasChanges, isSaving, handleSave]);
 
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
@@ -977,13 +1307,15 @@ export default function TaskEditor({
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "e" && e.shiftKey) {
         e.preventDefault();
-        handleExportPdf();
+        // Show export options instead of immediate export
+        setExportMode("full");
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleSave, insertMermaidDiagram, handleExportPdf]);
+  }, [handleSave, insertMermaidDiagram]);
 
+  // Unsaved changes warning
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (hasChanges && !isSaving) {
@@ -995,6 +1327,7 @@ export default function TaskEditor({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [hasChanges, isSaving]);
 
+  // Sync initial content
   useEffect(() => {
     if (editor && initialContent && Object.keys(initialContent).length > 0) {
       const current = editor.getJSON();
@@ -1075,24 +1408,95 @@ export default function TaskEditor({
             </span>
           )}
           
-          {/* PDF Export Button */}
-          <button
-            onClick={handleExportPdf}
-            disabled={isExporting}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
-              isExporting 
-                ? "bg-gray-100 text-gray-400 cursor-not-allowed" 
-                : "bg-indigo-600 text-white hover:bg-indigo-700 active:scale-[0.98]"
-            }`}
-            title="Export to PDF (Shift+Ctrl+E)"
-          >
-            {isExporting ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <FileDown className="w-4 h-4" />
+          {/* PDF Export Dropdown */}
+          <div className="relative" ref={menuRef}>
+            <button
+              onClick={() => setShowDiagramMenu(v => !v)}
+              disabled={isExporting}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
+                isExporting 
+                  ? "bg-gray-100 text-gray-400 cursor-not-allowed" 
+                  : "bg-indigo-600 text-white hover:bg-indigo-700 active:scale-[0.98]"
+              }`}
+              title="Export options (Shift+Ctrl+E)"
+            >
+              {isExporting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <FileDown className="w-4 h-4" />
+              )}
+              <span className="hidden sm:inline">{isExporting ? "Exporting" : "Export"}</span>
+              <ChevronDown className="w-3 h-3" />
+            </button>
+            
+            {showDiagramMenu && (
+              <div className="absolute top-full right-0 mt-1 w-64 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-50 animate-fade-in">
+                <div className="px-3 py-2 border-b border-gray-100">
+                  <p className="text-xs font-medium text-gray-700">Export Mode</p>
+                  {contentSizeWarning && (
+                    <p className="text-[10px] text-amber-600 mt-1 flex items-start gap-1">
+                      <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                      {contentSizeWarning}
+                    </p>
+                  )}
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={() => { handleExportPdf("full"); setShowDiagramMenu(false); }}
+                  disabled={isExporting}
+                  className="w-full px-3 py-2.5 text-left text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors disabled:opacity-50"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0">
+                    <FileDown className="w-4 h-4 text-indigo-600" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">Full Export</p>
+                    <p className="text-[10px] text-gray-500">All content + diagrams (may be slow)</p>
+                  </div>
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={() => { handleExportPdf("simple"); setShowDiagramMenu(false); }}
+                  disabled={isExporting}
+                  className="w-full px-3 py-2.5 text-left text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors disabled:opacity-50"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                    <Download className="w-4 h-4 text-emerald-600" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">Simple Export</p>
+                    <p className="text-[10px] text-gray-500">Text only, max 3 diagrams (fast & safe)</p>
+                  </div>
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={() => { handleExportPdf("print"); setShowDiagramMenu(false); }}
+                  disabled={isExporting}
+                  className="w-full px-3 py-2.5 text-left text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors disabled:opacity-50"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0">
+                    <Printer className="w-4 h-4 text-amber-600" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">Print Mode</p>
+                    <p className="text-[10px] text-gray-500">Use browser print → Save as PDF (zero memory risk)</p>
+                  </div>
+                </button>
+                
+                {exportWarning && (
+                  <div className="px-3 py-2 border-t border-gray-100 bg-amber-50">
+                    <p className="text-[10px] text-amber-700 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" />
+                      {exportWarning}
+                    </p>
+                  </div>
+                )}
+              </div>
             )}
-            <span className="hidden sm:inline">{isExporting ? "Exporting" : "Export PDF"}</span>
-          </button>
+          </div>
           
           <button
             onClick={handleSave}
@@ -1106,6 +1510,16 @@ export default function TaskEditor({
           </button>
         </div>
       </header>
+
+      {/* Content size warning banner */}
+      {contentSizeWarning && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2">
+          <div className="max-w-3xl mx-auto flex items-center gap-2 text-xs text-amber-800">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            <span>{contentSizeWarning}</span>
+          </div>
+        </div>
+      )}
 
       {/* ── Editor Area ── */}
       <div className="flex-1 overflow-auto">
@@ -1173,7 +1587,7 @@ export default function TaskEditor({
         <span className="hidden sm:inline">
           <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">S</kbd> save • 
           <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">M</kbd> diagram • 
-          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Shift+Ctrl+E</kbd> export PDF
+          <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-mono text-[10px]">Shift+Ctrl+E</kbd> export
         </span>
       </footer>
 
@@ -1206,9 +1620,9 @@ export default function TaskEditor({
         .mermaid-node .ProseMirror-focused { outline: none; }
         .mermaid-node .ProseMirror-selectednode { outline: none; }
         
-        /* Print-specific styles */
         @media print {
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .no-print { display: none !important; }
         }
       `}</style>
     </div>

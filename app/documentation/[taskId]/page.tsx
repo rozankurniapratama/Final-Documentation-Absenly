@@ -1,16 +1,23 @@
-// app/documentation/[taskId]/page.tsx
 import { createClient } from "@/lib/supabase/server";
-import { redirect, notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import TaskEditor from "./editor";
-import DocumentationPDF from "./editor/DocumentationPDF";
+import DocumentationDashboard from "./dashboard";
 
-interface PageProps {
-  params: Promise<{ taskId: string }>;
+interface Task {
+  id: string;
+  name: string;
+  task_order: number;
+  is_completed: boolean;
 }
 
-export default async function TaskEditorPage({ params }: PageProps) {
-  const { taskId } = await params;
+interface Module {
+  id: string;
+  name: string;
+  display_order: number;
+  tasks: Task[];
+}
+
+export default async function DocumentationPage() {
   const session = await getSession();
 
   if (!session?.authenticated) {
@@ -19,40 +26,43 @@ export default async function TaskEditorPage({ params }: PageProps) {
 
   const supabase = await createClient();
 
-  const { data: task, error: taskError } = await supabase
-    .from("tasks")
-    .select(`id, name, task_order, is_completed, modules (id, name)`)
-    .eq("id", taskId)
-    .single();
+  // Fetch modules with their tasks
+  const { data: modules, error } = await supabase
+    .from("modules")
+    .select(
+      `
+      id,
+      name,
+      display_order,
+      tasks (
+        id,
+        name,
+        task_order,
+        is_completed
+      )
+    `
+    )
+    .order("display_order", { ascending: true });
 
-  if (taskError || !task) {
-    console.error("Task fetch error:", taskError);
-    notFound();
+  if (error) {
+    console.error("Error fetching modules:", error);
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <div className="brutal-border bg-destructive/10 p-8">
+          <h1 className="text-xl font-bold">Error loading modules</h1>
+          <p className="text-muted-foreground">{error.message}</p>
+        </div>
+      </div>
+    );
   }
 
-  const { data: doc } = await supabase
-    .from("task_documentation")
-    .select("text_content")
-    .eq("task_id", taskId)
-    .maybeSingle();
+  // Sort tasks within each module
+  const sortedModules: Module[] = (modules || []).map((module) => ({
+    ...module,
+    tasks: [...(module.tasks || [])].sort(
+      (a, b) => a.task_order - b.task_order
+    ),
+  }));
 
-  const moduleName = (task.modules as { name: string } | null)?.name || "Unknown Module";
-
-  return (
-    <TaskEditor
-      taskId={task.id}
-      taskName={task.name}
-      moduleName={moduleName}
-      initialContent={doc?.text_content || null}
-    />
-  );
-}
-
-// Optional: Add metadata for SEO/document context
-export async function generateMetadata({ params }: PageProps) {
-  const { taskId } = await params;
-  return {
-    title: `Task Documentation #${taskId}`,
-    description: `Professional documentation for task ${taskId}`,
-  };
+  return <DocumentationDashboard modules={sortedModules} />;
 }

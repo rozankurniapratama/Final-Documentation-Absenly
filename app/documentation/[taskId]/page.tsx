@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect, notFound } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import TaskEditor from "./editor";
+import DocumentationPDF from "./editor/DocumentationPDF";
 
 interface PageProps {
   params: Promise<{ taskId: string }>;
@@ -45,4 +46,13 @@ export default async function TaskEditorPage({ params }: PageProps) {
       initialContent={doc?.text_content || null}
     />
   );
+}
+
+// Optional: Add metadata for SEO/document context
+export async function generateMetadata({ params }: PageProps) {
+  const { taskId } = await params;
+  return {
+    title: `Task Documentation #${taskId}`,
+    description: `Professional documentation for task ${taskId}`,
+  };
 }

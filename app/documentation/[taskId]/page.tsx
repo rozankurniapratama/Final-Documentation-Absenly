@@ -2,7 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect, notFound } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import TaskEditor from "./editor/TaskEditor";
+import TaskEditor from "./editor";
 import { Suspense } from "react";
 
 interface PageProps {
